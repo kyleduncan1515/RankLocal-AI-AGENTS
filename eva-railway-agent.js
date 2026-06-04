@@ -130,10 +130,10 @@ Also provide:
 - topOpportunity (niche and reason)
 - marketSummary (2 sentences)
 - agentDirectives (arthur, john, eva, finn)
-
+Keep your response concise. Each niche brief should be under 100 words
 JSON only. No markdown.`;
 
-  const raw  = await ask("You are Tommy, CEO of RankLocal AI. Generate validated niche intelligence. Never guarantee outcomes — always 'results may vary.'", prompt, MODELS.intelligence, 3000);
+  const raw  = await ask("You are Tommy, CEO of RankLocal AI. Generate validated niche intelligence. Never guarantee outcomes — always 'results may vary.'", prompt, MODELS.intelligence, 4000);
   const clean = raw.replace(/```json|```/g, "").trim();
   let intel;
   try { intel = JSON.parse(clean); }
