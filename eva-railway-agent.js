@@ -131,12 +131,56 @@ Also provide:
 - marketSummary (2 sentences)
 - agentDirectives (arthur, john, eva, finn)
 Keep your response concise. Each niche brief should be under 100 words
-JSON only. No markdown.`;
+const prompt = `Analyze top 3 niches for RankLocal AI today: HVAC, Plumbing, Roofing.
+
+For each provide a JSON object with:
+activityScore, trendingTopic, newsHook, sweetSpotKeyword, contentBrief, salesAngle
+
+Also provide:
+topOpportunity (object with niche and reason)
+marketSummary (one sentence)
+agentDirectives (object with arthur, john, eva, finn keys)
+
+Respond in valid compact JSON only. No markdown. No extra text.`;
 
   const raw  = await ask("You are Tommy, CEO of RankLocal AI. Generate validated niche intelligence. Never guarantee outcomes — always 'results may vary.'", prompt, MODELS.intelligence, 4000);
   const clean = raw.replace(/```json|```/g, "").trim();
   let intel;
   try { intel = JSON.parse(clean); }
+  catch {
+    try {
+      // Try to fix truncated JSON by finding the largest valid object
+      const m = clean.match(/\{[\s\S]*\}/);
+      if (m) {
+        // Add closing brackets if truncated
+        let attempt = m[0];
+        let opens = (attempt.match(/\{/g)||[]).length;
+        let closes = (attempt.match(/\}/g)||[]).length;
+        while (closes < opens) { attempt += "}"; closes++; }
+        intel = JSON.parse(attempt);
+      }
+    } catch(e) {
+      log(`JSON parse failed: ${e.message}`, "WARN");
+      intel = null;
+    }
+  }
+  if (!intel) {
+    // Build minimal intel object so cycle doesn't fail completely
+    intel = {
+      topOpportunity: { niche:"HVAC", reason:"Default fallback" },
+      marketSummary: "Market analysis unavailable. Running with defaults.",
+      agentDirectives: {
+        arthur: "Write an SEO blog post about HVAC maintenance tips for homeowners",
+        john: "Reach out to 20 HVAC company owners on LinkedIn today",
+        eva: "Monitor system performance and API costs",
+        finn: "Review subscriber approval rates and flag any at-risk accounts"
+      },
+      niches: [],
+      globalAssumptions: [],
+      dataNeeded: []
+    };
+    log("Using fallback intel — Tommy scan incomplete", "WARN");
+  } try { intel = JSON.parse(clean); }
   catch { const m = clean.match(/\{[\s\S]*\}/); intel = m ? JSON.parse(m[0]) : null; }
   if (!intel) throw new Error("Tommy intelligence parse failed");
 
