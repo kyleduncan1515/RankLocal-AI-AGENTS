@@ -1,0 +1,16 @@
+{
+  "name": "ranklocal-ai-agents",
+  "version": "1.0.0",
+  "description": "RankLocal AI — 5 agents running 24/7 on Railway writing to Airtable",
+  "main": "eva-railway-agent.js",
+  "scripts": {
+    "start": "node eva-railway-agent.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
