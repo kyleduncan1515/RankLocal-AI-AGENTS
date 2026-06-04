@@ -20,10 +20,13 @@ async function saveToAirtable(table, fields) {
       body: JSON.stringify({ fields })
     });
     const d = await res.json();
-    if (d.error) log(`Airtable error in ${table}: ${d.error.message}`, "WARN");
+    if (d.error) {
+      log(`Airtable error in ${table}: ${JSON.stringify(d.error)}`, "WARN");
+      log(`Fields attempted: ${JSON.stringify(Object.keys(fields))}`, "WARN");
+    }
     return d;
   } catch(err) {
-    log(`Airtable save failed: ${err.message}`, "WARN");
+    log(`Airtable save failed in ${table}: ${err.message}`, "WARN");
   }
 }
 
