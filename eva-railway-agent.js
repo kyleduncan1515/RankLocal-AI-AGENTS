@@ -1,4 +1,4 @@
-// RankLocal AI — Agent Engine v3 (Table IDs)
+// RankLocal AI — Agent Engine v3 (Table IDs + Exact Field Mapping)
 const Anthropic = require("@anthropic-ai/sdk");
 const cron = require("node-cron");
 const http = require("http");
@@ -81,9 +81,9 @@ const TIERS = {
 };
 
 const SAMPLE_SUBS = [
-  { "Business Name":"Dallas HVAC Pro",     niche:"HVAC",     city:"Dallas TX",  plan:"growth"   },
-  { "Business Name":"Houston Plumbing Co", niche:"Plumbing", city:"Houston TX", plan:"starter"  },
-  { "Business Name":"Austin Roofing LLC",  niche:"Roofing",  city:"Austin TX",  plan:"dominate" },
+  { "Business Name":"Dallas HVAC Pro",     "Contact Name":"John Smith",     niche:"HVAC",     city:"Dallas TX",  plan:"growth"   },
+  { "Business Name":"Houston Plumbing Co", "Contact Name":"Maria Garcia",   niche:"Plumbing", city:"Houston TX", plan:"starter"  },
+  { "Business Name":"Austin Roofing LLC",  "Contact Name":"Robert Johnson", niche:"Roofing",  city:"Austin TX",  plan:"dominate" },
 ];
 
 const TOMMY  = `You are Tommy, CEO of RankLocal AI. You analyze local service business markets. Never guarantee rankings. Results may vary.`;
@@ -91,6 +91,8 @@ const ARTHUR = `You are Arthur, CMO of RankLocal AI. You build high-value conten
 const JOHN   = `You are John, CSO of RankLocal AI. You sell AI SEO content to local businesses at $297/$497/$797/month. Use compelling questions to navigate prospects toward the website. Never guarantee rankings. Results may vary.`;
 const EVA    = `You are Eva, CTO of RankLocal AI. You build reliable systems and keep costs below $0.01 per document.`;
 const FINN   = `You are Finn, CPO of RankLocal AI. You own subscriber experience. Target: NPS over 60, month-3 retention over 80%.`;
+
+let cycleNumber = 1;
 
 async function runTommy() {
   log("Tommy: Running daily intelligence scan...");
@@ -132,6 +134,8 @@ Be specific.`, 200);
     "Real Estate Brief":results["Real Estate"] || "",
     "Law Firm Brief":   results["Law Firms"] || "",
     "Agent Directives": `ARTHUR: ${arthurDirective}\n\nJOHN: ${johnDirective}`,
+    "Assumptions":      "Using sample data for testing. Live subscriber data will replace this.",
+    "Data Needed":      "Active subscriber list from Subscribers table.",
   });
 
   log("Tommy: Intelligence complete.");
@@ -151,12 +155,15 @@ Each message ends with a compelling question. Never guarantee rankings. Results 
 
   if (scripts) {
     await saveToAirtable(TABLES.agentOutputs, {
-      "Date":        today(),
-      "Agent":       "John",
-      "Task Title":  `${topNiche} Outreach Scripts`,
-      "Task Output": scripts,
-      "Status":      "Completed",
-      "Niche":       topNiche,
+      "Date":           today(),
+      "Agent":          "John",
+      "Task Title":     `${topNiche} Outreach Scripts`,
+      "Task Output":    scripts,
+      "Wave":           1,
+      "Cycle Number":   cycleNumber,
+      "Niche":          topNiche,
+      "Status":         "Completed",
+      "Notes":          "LinkedIn outreach kit generated.",
     });
     log("John: Outreach scripts saved.");
   }
@@ -181,14 +188,17 @@ Topic: ${intelForNiche || niche + " tips for homeowners"}
 
   if (blog) {
     await saveToAirtable(TABLES.contentQueue, {
-      "Content Title": `Blog Post — ${niche} — ${today()}`,
-      "Content Type":  "Blog Post",
-      "Content Niche": niche,
-      "Content City":  city,
-      "Status":        "Pending Approval",
-      "Body":          blog,
-      "Due Date":      today(),
-      "Content Plan":  tier.label,
+      "Content Niche":   niche,
+      "Content Type":    "Blog Post",
+      "Content City":    city,
+      "Status":          "Pending Approval",
+      "Body":            blog,
+      "Due Date":        today(),
+      "Delivered Date":  null,
+      "Approved Date":   null,
+      "Revision Notes":  "",
+      "Content Plan":    tier.label,
+      "Content Title":   `Blog Post — ${niche} — ${today()}`,
     });
     log(`Arthur: Blog post saved for ${biz}`);
   }
@@ -202,14 +212,17 @@ Label them POST 1: POST 2: POST 3:`, 500);
 
   if (gbp) {
     await saveToAirtable(TABLES.contentQueue, {
-      "Content Title": `GBP Posts — ${niche} — ${today()}`,
-      "Content Type":  "GBP Post",
-      "Content Niche": niche,
-      "Content City":  city,
-      "Status":        "Pending Approval",
-      "Body":          gbp,
-      "Due Date":      today(),
-      "Content Plan":  tier.label,
+      "Content Niche":   niche,
+      "Content Type":    "GBP Post",
+      "Content City":    city,
+      "Status":          "Pending Approval",
+      "Body":            gbp,
+      "Due Date":        today(),
+      "Delivered Date":  null,
+      "Approved Date":   null,
+      "Revision Notes":  "",
+      "Content Plan":    tier.label,
+      "Content Title":   `GBP Posts — ${niche} — ${today()}`,
     });
     log(`Arthur: GBP posts saved for ${biz}`);
   }
@@ -224,14 +237,17 @@ Topics: educational tip, customer result, seasonal offer.`, 350);
 
     if (social) {
       await saveToAirtable(TABLES.contentQueue, {
-        "Content Title": `Social Captions — ${niche} — ${today()}`,
-        "Content Type":  "Social Caption",
-        "Content Niche": niche,
-        "Content City":  city,
-        "Status":        "Pending Approval",
-        "Body":          social,
-        "Due Date":      today(),
-        "Content Plan":  tier.label,
+        "Content Niche":   niche,
+        "Content Type":    "Social Caption",
+        "Content City":    city,
+        "Status":          "Pending Approval",
+        "Body":            social,
+        "Due Date":        today(),
+        "Delivered Date":  null,
+        "Approved Date":   null,
+        "Revision Notes":  "",
+        "Content Plan":    tier.label,
+        "Content Title":   `Social Captions — ${niche} — ${today()}`,
       });
       log(`Arthur: Social captions saved for ${biz}`);
     }
@@ -247,14 +263,17 @@ Add "verify this data before sharing" near any statistics.`, 200);
 
     if (news) {
       await saveToAirtable(TABLES.contentQueue, {
-        "Content Title": `Industry News — ${niche} — ${today()}`,
-        "Content Type":  "News Update",
-        "Content Niche": niche,
-        "Content City":  city,
-        "Status":        "Pending Approval",
-        "Body":          news,
-        "Due Date":      today(),
-        "Content Plan":  tier.label,
+        "Content Niche":   niche,
+        "Content Type":    "News Update",
+        "Content City":    city,
+        "Status":          "Pending Approval",
+        "Body":            news,
+        "Due Date":        today(),
+        "Delivered Date":  null,
+        "Approved Date":   null,
+        "Revision Notes":  "",
+        "Content Plan":    tier.label,
+        "Content Title":   `Industry News — ${niche} — ${today()}`,
       });
       log(`Arthur: News update saved for ${biz}`);
     }
@@ -271,11 +290,15 @@ Estimated API cost: $${cost.toFixed(3)}
 
   if (report) {
     await saveToAirtable(TABLES.agentOutputs, {
-      "Date":        today(),
-      "Agent":       "Eva",
-      "Task Title":  "System Health Check",
-      "Task Output": report,
-      "Status":      "Completed",
+      "Date":           today(),
+      "Agent":          "Eva",
+      "Task Title":     "System Health Check",
+      "Task Output":    report,
+      "Wave":           1,
+      "Cycle Number":   cycleNumber,
+      "Niche":          "System",
+      "Status":         "Completed",
+      "Notes":          "System health check completed.",
     });
     log("Eva: System report saved.");
   }
@@ -290,11 +313,15 @@ Active subscribers: ${subCount}
 
   if (report) {
     await saveToAirtable(TABLES.agentOutputs, {
-      "Date":        today(),
-      "Agent":       "Finn",
-      "Task Title":  "Subscriber Experience Check",
-      "Task Output": report,
-      "Status":      "Completed",
+      "Date":           today(),
+      "Agent":          "Finn",
+      "Task Title":     "Subscriber Experience Check",
+      "Task Output":    report,
+      "Wave":           1,
+      "Cycle Number":   cycleNumber,
+      "Niche":          "Retention",
+      "Status":         "Completed",
+      "Notes":          "Subscriber experience check completed.",
     });
     log("Finn: Experience report saved.");
   }
@@ -345,10 +372,25 @@ async function runDailyCycle() {
     estimatedCost += 0.005;
 
     await saveToAirtable(TABLES.metrics, {
-      "Date":                     today(),
-      "Content Pieces Generated": contentCount,
-      "API Cost":                 estimatedCost,
-      "Notes":                    `Cycle complete. ${subs.length} subscribers. Top niche: ${intel.topNiche}`,
+      "Date":                       today(),
+      "MRR":                        null,
+      "New Clients":                0,
+      "Churned Clients":            0,
+      "Total Subscribers":          subs.length,
+      "DMs Sent":                   0,
+      "DM Replies":                 0,
+      "Emails Sent":                0,
+      "Email Open Rate":            0,
+      "Email Reply Rate":           0,
+      "Demos Booked":               0,
+      "Demos Closed":               0,
+      "Content Pieces Generated":   contentCount,
+      "Content Pieces Approved":    0,
+      "Approval Rate":              0,
+      "API Cost":                   estimatedCost,
+      "LinkedIn Followers":         0,
+      "Email Subscribers":          0,
+      "Notes":                      `Cycle ${cycleNumber} complete. ${subs.length} subscribers. Top niche: ${intel.topNiche}`,
     });
 
     const mins = ((Date.now() - start) / 60000).toFixed(1);
@@ -357,11 +399,13 @@ async function runDailyCycle() {
     log(`Content: ${contentCount} pieces | Cost: $${estimatedCost.toFixed(3)}`);
     log("=========================================");
 
+    cycleNumber++;
+
   } catch(err) {
     log(`CYCLE FAILED: ${err.message}`, "ERROR");
     await saveToAirtable(TABLES.metrics, {
       "Date":  today(),
-      "Notes": `CYCLE FAILED: ${err.message}`,
+      "Notes": `CYCLE ${cycleNumber} FAILED: ${err.message}`,
     });
   }
 }
