@@ -130,7 +130,7 @@ Be specific.`, 200);
     "Dental Brief":     results["Dental"] || "",
     "Auto Repair Brief":results["Auto Repair"] || "",
     "Real Estate Brief":results["Real Estate"] || "",
-    "Law Firms Brief":  results["Law Firms"] || "",
+    "Law Firm Brief":   results["Law Firms"] || "",
     "Agent Directives": `ARTHUR: ${arthurDirective}\n\nJOHN: ${johnDirective}`,
   });
 
@@ -305,10 +305,10 @@ async function runDailyCycle() {
   let contentCount = 0;
   let estimatedCost = 0;
 
-  log("=======================================");
+  log("=========================================");
   log("RANKLOCAL AI — DAILY CYCLE STARTING");
   log(`Date: ${new Date().toDateString()}`);
-  log("=======================================");
+  log("=========================================");
 
   try {
     const intel = await runTommy();
@@ -352,10 +352,10 @@ async function runDailyCycle() {
     });
 
     const mins = ((Date.now() - start) / 60000).toFixed(1);
-    log("=======================================");
+    log("=========================================");
     log(`CYCLE COMPLETE in ${mins} minutes`);
     log(`Content: ${contentCount} pieces | Cost: $${estimatedCost.toFixed(3)}`);
-    log("=======================================");
+    log("=========================================");
 
   } catch(err) {
     log(`CYCLE FAILED: ${err.message}`, "ERROR");
@@ -396,3 +396,4 @@ server.headersTimeout   = 120000;
 server.listen(PORT, "0.0.0.0", () => {
   log(`Health check running on port ${PORT}`);
 });
+
