@@ -420,7 +420,7 @@ cron.schedule("0 7 * * *", () => {
 
 log("RankLocal AI agents starting…");
 log("Test cycle begins in 15 seconds");
-setTimeout(runDailyCycle, 15000);
+setTimeout(runDailyCycle, 5000);
 
 // ═══════════════════════════════════════════════════════════════
 //  HEALTH CHECK
@@ -439,6 +439,24 @@ http.createServer(async (req, res) => {
       next_cycle: "Daily at 7am Central"
     }));
   }
-}).listen(PORT, () => {
-  log(`Health check server on port ${PORT}`);
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer(async (req, res) => {
+  res.writeHead(200, { "Content-Type":"application/json" });
+  if (req.url === "/run") {
+    res.end(JSON.stringify({ status:"Cycle started", time:new Date().toISOString() }));
+    runDailyCycle();
+  } else {
+    res.end(JSON.stringify({
+      status: "RankLocal AI agents running",
+      time:   new Date().toISOString(),
+    }));
+  }
+});
+
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 120000;
+
+server.listen(PORT, "0.0.0.0", () => {
+  log(`Health check running on port ${PORT}`);
 });
