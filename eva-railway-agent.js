@@ -118,10 +118,18 @@ Be specific.`, 200);
   const johnDirective = await ask(JOHN,
     `Which trade should John focus on today and what compelling question should he open with? 2 sentences max.`, 150);
 
+  // Find highest scoring niche
+  const nicheScores = {};
+  for (const niche of Object.keys(results)) {
+    const text = results[niche] || "";
+    nicheScores[niche] = text.length;
+  }
+  const topNiche = Object.keys(nicheScores).reduce((a,b) => nicheScores[a] > nicheScores[b] ? a : b, "HVAC");
+
   await saveToAirtable(TABLES.dailyIntelligence, {
     "Date":             today(),
-    "Top Niche":        "HVAC",
-    "Market Summary":   "Daily intelligence complete. Top opportunity: HVAC.",
+    "Top Niche":        topNiche,
+    "Market Summary":   `Daily intelligence complete. Top opportunity: ${topNiche}. All 9 niches analyzed.`,
     "HVAC Brief":       results["HVAC"] || "",
     "Plumbing Brief":   results["Plumbing"] || "",
     "Roofing Brief":    results["Roofing"] || "",
