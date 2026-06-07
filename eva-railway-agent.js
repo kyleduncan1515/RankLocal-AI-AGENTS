@@ -143,8 +143,7 @@ Be specific.`, 200);
   });
 
   log("Tommy: Intelligence complete.");
-  return { topNiche:"HVAC", results, arthurDirective, johnDirective };
-}
+  return { topNiche, results, arthurDirective, johnDirective };
 
 async function runJohn(topNiche) {
   log("John: Writing outreach scripts...");
