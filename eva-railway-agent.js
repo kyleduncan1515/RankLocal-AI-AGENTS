@@ -1,406 +1,77 @@
-// RankLocal AI — Agent Engine v3 (Table IDs)
-const Anthropic = require("@anthropic-ai/sdk");
-const cron = require("node-cron");
-const http = require("http");
+const TOMMY = `You are Tommy, lead intelligence officer 
+for Rayburn Roofing in Houston Texas. Your job is 
+to scan the Houston roofing market every morning and 
+identify the highest opportunity targets for the day.
 
-const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const AIRTABLE_KEY  = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_BASE = "appl5FS9jI72auXyM";
+Scan for:
+- Recent hail storms or severe weather in Houston area
+- Neighborhoods with older roofs due for replacement
+- Commercial property sales and new ownership
+- HOA communities needing roof inspections
+- Insurance claim activity in Houston zip codes
+- Competitor gaps and weaknesses
 
-// ─── TABLE IDs ─────────────────────────────────────────────────
-const TABLES = {
-  subscribers:       "tbl2taK63llf37led",
-  contentQueue:      "tblJhRGX4kQFWC45y",
-  dailyIntelligence: "tblYY2zZPeAu3h1Vm",
-  agentOutputs:      "tbl14ONswSCjp5EFU",
-  metrics:           "tblOdvg1ARhp8pszD",
-  outreachLog:       "tblojTAGY0hi3TQRl",
-};
+Output every morning:
+- Top opportunity for today (commercial or residential)
+- Target neighborhood or property type
+- News hook or weather event to use in content
+- Directive for Arthur, John, Eva, and Finn
 
-const AIRTABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE}`;
+Never guarantee outcomes. Results may vary.`;
 
-async function saveToAirtable(tableId, fields) {
-  try {
-    const res = await fetch(`${AIRTABLE_URL}/${tableId}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${AIRTABLE_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ records: [{ fields }] })
-    });
-    const d = await res.json();
-    if (d.error) {
-      log(`Airtable error in ${tableId}: ${JSON.stringify(d.error)}`, "WARN");
-    }
-    return d;
-  } catch(err) {
-    log(`Airtable save failed: ${err.message}`, "WARN");
-  }
-}
+const ARTHUR = `You are Arthur, content writer for 
+Rayburn Roofing in Houston Texas. You write 
+social media content that generates roofing leads.
 
-async function getFromAirtable(tableId, filter) {
-  try {
-    const url = filter
-      ? `${AIRTABLE_URL}/${tableId}?filterByFormula=${encodeURIComponent(filter)}`
-      : `${AIRTABLE_URL}/${tableId}`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${AIRTABLE_KEY}` }
-    });
-    const d = await res.json();
-    return d.records || [];
-  } catch(err) {
-    log(`Airtable get failed: ${err.message}`, "WARN");
-    return [];
-  }
-}
+You write for these platforms daily:
+- Facebook neighborhood groups in Houston
+- LinkedIn targeting property managers
+- Nextdoor in Houston suburbs
+- Instagram and TikTok short captions
 
-const log   = (msg, level="INFO") => console.log(`[${new Date().toISOString()}] [${level}] ${msg}`);
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const today = () => new Date().toISOString().split("T")[0];
+Every piece of content:
+- Offers a free inspection with no obligation
+- Mentions Rayburn Roofing by name
+- Targets either homeowners or property managers
+- Uses the weather or news hook Tommy identified
+- Ends with a clear call to action to DM or comment
 
-async function ask(system, user, maxTok=800) {
-  try {
-    const res = await ai.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: maxTok,
-      system,
-      messages: [{ role:"user", content:user }]
-    });
-    return res.content.map(b => b.text || "").join("");
-  } catch(err) {
-    log(`Claude error: ${err.message}`, "ERROR");
-    return "";
-  }
-}
+Never guarantee specific outcomes. Results may vary.`;
 
-const TIERS = {
-  starter:  { label:"Starter",  social:false, news:false },
-  growth:   { label:"Growth",   social:true,  news:true  },
-  dominate: { label:"Dominate", social:true,  news:true  },
-};
+const JOHN = `You are John, lead outreach specialist 
+for Rayburn Roofing in Houston Texas. You write 
+LinkedIn outreach messages targeting commercial 
+roofing leads.
 
-const SAMPLE_SUBS = [
-  { "Business Name":"Dallas HVAC Pro",     niche:"HVAC",     city:"Dallas TX",  plan:"growth"   },
-  { "Business Name":"Houston Plumbing Co", niche:"Plumbing", city:"Houston TX", plan:"starter"  },
-  { "Business Name":"Austin Roofing LLC",  niche:"Roofing",  city:"Austin TX",  plan:"dominate" },
-];
+Your targets in order of priority:
+1. Commercial property managers in Houston
+2. Facilities managers at Houston companies
+3. HOA managers in Houston suburbs
+4. Building owners and real estate investors
+5. Residential homeowners in storm affected areas
 
-const TOMMY  = `You are Tommy, CEO of RankLocal AI. You analyze local service business markets. Never guarantee rankings. Results may vary.`;
-const ARTHUR = `You are Arthur, CMO of RankLocal AI. You build high-value content assets that produce income regardless of daily labor. Every piece solves a real problem and navigates readers toward the website. Never guarantee rankings. Results may vary.`;
-const JOHN   = `You are John, CSO of RankLocal AI. You sell AI SEO content to local businesses at $297/$497/$797/month. Use compelling questions to navigate prospects toward the website. Never guarantee rankings. Results may vary.`;
-const EVA    = `You are Eva, CTO of RankLocal AI. You build reliable systems and keep costs below $0.01 per document.`;
-const FINN   = `You are Finn, CPO of RankLocal AI. You own subscriber experience. Target: NPS over 60, month-3 retention over 80%.`;
+Every message you write:
+- References Rayburn Roofing
+- Offers a free commercial or residential inspection
+- Asks one compelling question
+- Never guarantees outcomes
+- Always says results may vary`;
 
-async function runTommy() {
-  log("Tommy: Running daily intelligence scan...");
-  const niches = ["HVAC","Plumbing","Roofing","Electrical","Landscaping","Dental","Auto Repair","Real Estate","Law Firms"];
-  const results = {};
+const EVA = `You are Eva, systems manager for 
+Rayburn Roofing lead generation operation. 
+You track which platforms and content types 
+generate the most roofing leads in Houston 
+and report what is working and what is not 
+so the team can double down on winners.`;
 
-  for (const niche of niches) {
-    try {
-      const intel = await ask(TOMMY,
-        `In 3 sentences for ${niche} businesses today:
-1. What topic is being searched most right now
-2. One specific news hook or trend (add VERIFY SOURCE)
-3. The best keyword to target this week
-Be specific.`, 200);
-      results[niche] = intel;
-      await sleep(300);
-    } catch(err) {
-      results[niche] = `${niche} intelligence unavailable today.`;
-    }
-  }
+const FINN = `You are Finn, lead follow up manager 
+for Rayburn Roofing in Houston Texas. 
+You make sure every lead gets followed up 
+within 24 hours. You track which leads 
+converted to inspections and which 
+inspections converted to closed roofing jobs. 
+You flag any lead that has not been 
+contacted within 24 hours.`;
 
-  const arthurDirective = await ask(ARTHUR,
-    `Based on current HVAC market trends write one specific content directive for today. 2 sentences max.`, 150);
-
-  const johnDirective = await ask(JOHN,
-    `Which trade should John focus on today and what compelling question should he open with? 2 sentences max.`, 150);
-
-  // Find highest scoring niche
-  const nicheScores = {};
-  for (const niche of Object.keys(results)) {
-    const text = results[niche] || "";
-    nicheScores[niche] = text.length;
-  }
-  const topNiche = Object.keys(nicheScores).reduce((a,b) => nicheScores[a] > nicheScores[b] ? a : b, "HVAC");
-
-  await saveToAirtable(TABLES.dailyIntelligence, {
-    "Date":             today(),
-    "Top Niche":        topNiche,
-    "Market Summary":   `Daily intelligence complete. Top opportunity: ${topNiche}. All 9 niches analyzed.`,
-    "HVAC Brief":       results["HVAC"] || "",
-    "Plumbing Brief":   results["Plumbing"] || "",
-    "Roofing Brief":    results["Roofing"] || "",
-    "Electrical Brief": results["Electrical"] || "",
-    "Landscaping Brief":results["Landscaping"] || "",
-    "Dental Brief":     results["Dental"] || "",
-    "Auto Repair Brief":results["Auto Repair"] || "",
-    "Real Estate Brief":results["Real Estate"] || "",
-    "Law Firm Brief":   results["Law Firms"] || "",
-    "Agent Directives": `ARTHUR: ${arthurDirective}\n\nJOHN: ${johnDirective}`,
-  });
-
-  log("Tommy: Intelligence complete.");
-  return { topNiche, results, arthurDirective, johnDirective };
-
-async function runJohn(topNiche) {
-  log("John: Writing outreach scripts...");
-  const scripts = await ask(JOHN,
-    `Write today's LinkedIn outreach kit for ${topNiche} company owners.
-1. CONNECTION REQUEST (30 words max)
-2. FIRST DM (60 words max)
-3. FOLLOW UP (50 words max)
-4. FREE SAMPLE OFFER (60 words max)
-5. CLOSE MESSAGE (50 words max)
-Each message ends with a compelling question. Never guarantee rankings. Results may vary.`, 600);
-
-  if (scripts) {
-    await saveToAirtable(TABLES.agentOutputs, {
-      "Date":        today(),
-      "Agent":       "John",
-      "Task Title":  `${topNiche} Outreach Scripts`,
-      "Task Output": scripts,
-      "Status":      "Completed",
-      "Niche":       topNiche,
-    });
-    log("John: Outreach scripts saved.");
-  }
-}
-
-async function runArthur(sub, intelForNiche) {
-  const tier  = TIERS[sub.plan?.toLowerCase()] || TIERS.starter;
-  const biz   = sub["Business Name"] || "Local Business";
-  const city  = sub.city || sub["City"] || "their city";
-  const niche = sub.niche || sub["Niche"] || "Home Services";
-
-  log(`Arthur: Writing content for ${biz}...`);
-
-  const blog = await ask(ARTHUR,
-    `Write a 600-word SEO blog post for ${biz}, a ${niche} company in ${city}.
-Topic: ${intelForNiche || niche + " tips for homeowners"}
-- Start with an H1 title
-- Use 2 H2 subheadings
-- Mention ${city} naturally 3 times
-- End with a call to action to contact ${biz}
-- Add "results may vary" near any statistics`, 1000);
-
-  if (blog) {
-    await saveToAirtable(TABLES.contentQueue, {
-      "Content Title": `Blog Post — ${niche} — ${today()}`,
-      "Content Type":  "Blog Post",
-      "Content Niche": niche,
-      "Content City":  city,
-      "Status":        "Pending Approval",
-      "Body":          blog,
-      "Due Date":      today(),
-      "Content Plan":  tier.label,
-    });
-    log(`Arthur: Blog post saved for ${biz}`);
-  }
-
-  await sleep(500);
-
-  const gbp = await ask(ARTHUR,
-    `Write 3 short Google Business Profile posts for ${biz} in ${city}.
-Each post: 80 words max, friendly tone, ends with call to action.
-Label them POST 1: POST 2: POST 3:`, 500);
-
-  if (gbp) {
-    await saveToAirtable(TABLES.contentQueue, {
-      "Content Title": `GBP Posts — ${niche} — ${today()}`,
-      "Content Type":  "GBP Post",
-      "Content Niche": niche,
-      "Content City":  city,
-      "Status":        "Pending Approval",
-      "Body":          gbp,
-      "Due Date":      today(),
-      "Content Plan":  tier.label,
-    });
-    log(`Arthur: GBP posts saved for ${biz}`);
-  }
-
-  await sleep(500);
-
-  if (tier.social) {
-    const social = await ask(ARTHUR,
-      `Write 3 social media captions for ${biz}.
-Each: 60 words, hook first, ends with compelling question.
-Topics: educational tip, customer result, seasonal offer.`, 350);
-
-    if (social) {
-      await saveToAirtable(TABLES.contentQueue, {
-        "Content Title": `Social Captions — ${niche} — ${today()}`,
-        "Content Type":  "Social Caption",
-        "Content Niche": niche,
-        "Content City":  city,
-        "Status":        "Pending Approval",
-        "Body":          social,
-        "Due Date":      today(),
-        "Content Plan":  tier.label,
-      });
-      log(`Arthur: Social captions saved for ${biz}`);
-    }
-    await sleep(500);
-  }
-
-  if (tier.news && intelForNiche) {
-    const news = await ask(ARTHUR,
-      `Write a 100-word industry news update for ${biz} about recent ${niche} trends.
-Based on: ${intelForNiche}
-What it means for their business and one action to take.
-Add "verify this data before sharing" near any statistics.`, 200);
-
-    if (news) {
-      await saveToAirtable(TABLES.contentQueue, {
-        "Content Title": `Industry News — ${niche} — ${today()}`,
-        "Content Type":  "News Update",
-        "Content Niche": niche,
-        "Content City":  city,
-        "Status":        "Pending Approval",
-        "Body":          news,
-        "Due Date":      today(),
-        "Content Plan":  tier.label,
-      });
-      log(`Arthur: News update saved for ${biz}`);
-    }
-  }
-}
-
-async function runEva(contentCount, cost) {
-  log("Eva: Running system check...");
-  const report = await ask(EVA,
-    `Write a brief system health report.
-Content pieces generated: ${contentCount}
-Estimated API cost: $${cost.toFixed(3)}
-3 bullet points: what worked, what to watch, one optimization.`, 150);
-
-  if (report) {
-    await saveToAirtable(TABLES.agentOutputs, {
-      "Date":        today(),
-      "Agent":       "Eva",
-      "Task Title":  "System Health Check",
-      "Task Output": report,
-      "Status":      "Completed",
-    });
-    log("Eva: System report saved.");
-  }
-}
-
-async function runFinn(subCount) {
-  log("Finn: Running subscriber check...");
-  const report = await ask(FINN,
-    `Write a brief subscriber experience note.
-Active subscribers: ${subCount}
-2 bullet points: what subscribers need this week and one retention tip.`, 150);
-
-  if (report) {
-    await saveToAirtable(TABLES.agentOutputs, {
-      "Date":        today(),
-      "Agent":       "Finn",
-      "Task Title":  "Subscriber Experience Check",
-      "Task Output": report,
-      "Status":      "Completed",
-    });
-    log("Finn: Experience report saved.");
-  }
-}
-
-async function runDailyCycle() {
-  const start = Date.now();
-  let contentCount = 0;
-  let estimatedCost = 0;
-
-  log("=========================================");
-  log("RANKLOCAL AI — DAILY CYCLE STARTING");
-  log(`Date: ${new Date().toDateString()}`);
-  log("=========================================");
-
-  try {
-    const intel = await runTommy();
-    estimatedCost += 0.04;
-
-    await runJohn(intel.topNiche);
-    estimatedCost += 0.01;
-    await sleep(1000);
-
-    const records = await getFromAirtable(TABLES.subscribers, "{Status}='Active'");
-    const subs = records.length
-      ? records.map(r => ({ id:r.id, ...r.fields }))
-      : SAMPLE_SUBS;
-
-    log(`Processing ${subs.length} subscribers...`);
-
-    for (const sub of subs) {
-      try {
-        const niche = sub.niche || sub["Niche"] || "HVAC";
-        const intelForNiche = intel.results[niche] || "";
-        await runArthur(sub, intelForNiche);
-        contentCount += 2;
-        estimatedCost += 0.04;
-        await sleep(1500);
-      } catch(err) {
-        log(`Subscriber failed: ${err.message}`, "ERROR");
-      }
-    }
-
-    await runEva(contentCount, estimatedCost);
-    estimatedCost += 0.005;
-
-    await runFinn(subs.length);
-    estimatedCost += 0.005;
-
-    await saveToAirtable(TABLES.metrics, {
-      "Date":                     today(),
-      "Content Pieces Generated": contentCount,
-      "API Cost":                 estimatedCost,
-      "Notes":                    `Cycle complete. ${subs.length} subscribers. Top niche: ${intel.topNiche}`,
-    });
-
-    const mins = ((Date.now() - start) / 60000).toFixed(1);
-    log("=========================================");
-    log(`CYCLE COMPLETE in ${mins} minutes`);
-    log(`Content: ${contentCount} pieces | Cost: $${estimatedCost.toFixed(3)}`);
-    log("=========================================");
-
-  } catch(err) {
-    log(`CYCLE FAILED: ${err.message}`, "ERROR");
-    await saveToAirtable(TABLES.metrics, {
-      "Date":  today(),
-      "Notes": `CYCLE FAILED: ${err.message}`,
-    });
-  }
-}
-
-cron.schedule("0 7 * * *", () => {
-  log("CRON: 7am — starting daily cycle");
-  runDailyCycle();
-}, { timezone: "America/Chicago" });
-
-log("RankLocal AI agents starting...");
-log("Test cycle begins in 5 seconds");
-setTimeout(runDailyCycle, 5000);
-
-const PORT = process.env.PORT || 3000;
-
-const server = http.createServer(async (req, res) => {
-  res.writeHead(200, { "Content-Type":"application/json" });
-  if (req.url === "/run") {
-    res.end(JSON.stringify({ status:"Cycle started", time:new Date().toISOString() }));
-    runDailyCycle();
-  } else {
-    res.end(JSON.stringify({
-      status: "RankLocal AI agents running",
-      time:   new Date().toISOString(),
-    }));
-  }
-});
-
-server.keepAliveTimeout = 120000;
-server.headersTimeout   = 120000;
-
-server.listen(PORT, "0.0.0.0", () => {
-  log(`Health check running on port ${PORT}`);
-});
+ 
 
