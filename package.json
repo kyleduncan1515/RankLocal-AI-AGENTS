@@ -1,7 +1,7 @@
 {
-  "name": "ranklocal-ai-agents",
+  "name": "rayburn-roofing-agents",
   "version": "1.0.0",
-  "description": "RankLocal AI — 5 agents running 24/7 on Railway writing to Airtable",
+  "description": "Rayburn Roofing Houston Lead Generation Agents",
   "main": "eva-railway-agent.js",
   "scripts": {
     "start": "node eva-railway-agent.js"
