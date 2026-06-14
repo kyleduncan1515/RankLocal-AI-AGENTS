@@ -338,22 +338,29 @@ STORM URGENCY POST (label it): Under 80 words MAXIMUM. ${stormData?.isStormActiv
     return match ? match[1].trim() : "";
   };
 
-  await saveToAirtable(TABLES.contentQueue, {
-    "Content Title":   `Houston Roofing Content — ${stormData?.isStormActive ? "🚨 STORM" : today()}`,
-    "Content Type":    "Social Caption",
-    "Content Niche":   "Roofing",
-    "Content City":    "Houston TX",
-    "Status":          "Pending Approval",
-    "Body":            content,
-    "LinkedIn Post":   extract("LINKEDIN POST", content),
-    "Facebook Post":   extract("FACEBOOK POST", content),
-    "Nextdoor Post":   extract("NEXTDOOR POST", content),
-    "TikTok Hook":     extract("TIKTOK HOOK", content),
-    "Storm Post":      extract("STORM URGENCY POST", content),
-    "Due Date":        today(),
-    "Content Plan":    "Growth",
-  });
+  // Parse individual posts into separate fields
+  const extract = (label, text) => {
+    const regex = new RegExp(label + '[^:]*:([\\s\\S]*?)(?=\\n[A-Z ]{3,}[^a-z]*:|$)', 'i');
+    const match = text.match(regex);
+    return match ? match[1].trim().slice(0, 500) : "";
+  };
 
+  await saveToAirtable(TABLES.contentQueue, {
+    "Content Title":  `Houston Roofing Content — ${stormData?.isStormActive ? "🚨 STORM" : today()}`,
+    "Content Type":   "Social Caption",
+    "Content Niche":  "Roofing",
+    "Content City":   "Houston TX",
+    "Status":         "Pending Approval",
+    "Body":           content,
+    "LinkedIn Post":  extract("LINKEDIN POST", content),
+    "Facebook Post":  extract("FACEBOOK POST", content),
+    "Nextdoor Post":  extract("NEXTDOOR POST", content),
+    "TikTok Hook":    extract("TIKTOK HOOK", content),
+    "Storm Post":     extract("STORM POST", content),
+    "Due Date":       today(),
+    "Content Plan":   "Growth",
+  });
+ 
   log("Arthur: Content saved to Airtable.");
   return content;
 }
