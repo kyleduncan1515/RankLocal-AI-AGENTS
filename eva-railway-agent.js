@@ -447,27 +447,70 @@ TIKTOK HOOK (label it): First line stops scroll in 2 seconds. Under 60 words. Ho
 STORM URGENCY POST (label it): ${stormData?.isStormActive ? "EMERGENCY post based on ACTIVE alerts. Maximum urgency." : "Pre-storm awareness post. Seasonal angle."}`, 1200
   );
 
-  // Extract each post into its own Airtable field
+  // Robust extraction — tries multiple patterns to handle any Claude output format
   const extractPost = (label, text) => {
     try {
-      const pattern = label + "[^:]*:([\s\S]*?)(?=\n[A-Z][A-Z ]{2,}[^a-z]*:|$)";
-      const match = text.match(new RegExp(pattern, "i"));
-      return match ? match[1].trim().slice(0, 500) : "";
-    } catch(e) { return ""; }
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const patterns = [
+        escaped + "\\s*\\([^)]*\\)\\s*:[\\s\\S]*?\\n([\\s\\S]*?)(?=\\n[A-Z][A-Z\\s]{3,}(?:POST|HOOK|EMAIL|URGENCY|BUSINESS)|$)",
+        escaped + "[^:\\n]*:([\\s\\S]*?)(?=\\n[A-Z][A-Z\\s]{3,}(?:POST|HOOK|EMAIL|URGENCY|BUSINESS)|$)",
+        escaped + "[^:\\n]*:([\\s\\S]*?)(?=\\n\\n[A-Z]|$)",
+      ];
+      for (const pattern of patterns) {
+        try {
+          const match = text.match(new RegExp(pattern, "i"));
+          if (match) {
+            const extracted = (match[1] || match[0]).trim();
+            if (extracted.length > 15) return extracted.slice(0, 500);
+          }
+        } catch(e2) { continue; }
+      }
+      // Fallback: find the label line and take the next paragraph
+      const lines = text.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes(label.toLowerCase())) {
+          const parts = [];
+          let j = i + 1;
+          while (j < lines.length && j < i + 10) {
+            const line = lines[j].trim();
+            if (!line) { j++; continue; }
+            // Stop if we hit the next section label
+            if (/^[A-Z][A-Z\s]{3,}:/.test(line) && !line.startsWith("http")) break;
+            parts.push(line);
+            j++;
+          }
+          const result = parts.join(" ").trim();
+          if (result.length > 15) return result.slice(0, 500);
+        }
+      }
+      return "";
+    } catch(e) {
+      log("extractPost error for " + label + ": " + e.message, "WARN");
+      return "";
+    }
   };
 
+  const linkedinPost  = extractPost("LINKEDIN POST", content);
+  const facebookPost  = extractPost("FACEBOOK POST", content);
+  const nextdoorPost  = extractPost("NEXTDOOR POST", content);
+  const tiktokHook    = extractPost("TIKTOK HOOK", content);
+  const stormPost     = extractPost("STORM POST", content) || extractPost("STORM URGENCY POST", content);
+
+  log("Arthur extracted — LinkedIn: " + linkedinPost.slice(0,50) + "...");
+  log("Arthur extracted — Facebook: " + facebookPost.slice(0,50) + "...");
+
   await saveToAirtable(TABLES.contentQueue, {
-    "Content Title":  "Houston Content " + (stormData && stormData.isStormActive ? "STORM" : today()),
+    "Content Title":  "Rayburn Roofing — " + new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
     "Content Type":   "Social Caption",
     "Content Niche":  "Roofing",
     "Content City":   "Houston TX",
     "Status":         "Pending Approval",
     "Body":           content,
-    "LinkedIn Post":  extractPost("LINKEDIN POST", content),
-    "Facebook Post":  extractPost("FACEBOOK POST", content),
-    "Nextdoor Post":  extractPost("NEXTDOOR POST", content),
-    "TikTok Hook":    extractPost("TIKTOK HOOK", content),
-    "Storm Post":     extractPost("STORM POST", content),
+    "LinkedIn Post":  linkedinPost,
+    "Facebook Post":  facebookPost,
+    "Nextdoor Post":  nextdoorPost,
+    "TikTok Hook":    tiktokHook,
+    "Storm Post":     stormPost,
     "Due Date":       today(),
     "Content Plan":   "Growth",
   });
