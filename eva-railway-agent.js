@@ -331,15 +331,27 @@ TIKTOK HOOK (label it): Under 50 words MAXIMUM. First line stops scroll in 2 sec
 STORM URGENCY POST (label it): Under 80 words MAXIMUM. ${stormData?.isStormActive ? "EMERGENCY — active storm alerts in Houston. Maximum urgency." : "Pre-storm awareness. Seasonal Houston angle."} Free same-day Rayburn Roofing inspection. Houston Texas only.`, 1000
   );
 
+ // Parse individual posts from Arthur's output
+  const extract = (label, text) => {
+    const regex = new RegExp(`${label}[^:]*:([\\s\\S]*?)(?=\\n[A-Z ]+:|$)`, 'i');
+    const match = text.match(regex);
+    return match ? match[1].trim() : "";
+  };
+
   await saveToAirtable(TABLES.contentQueue, {
-    "Content Title": `Houston Roofing Content — ${stormData?.isStormActive ? "🚨 STORM" : today()}`,
-    "Content Type":  "Social Caption",
-    "Content Niche": "Roofing",
-    "Content City":  "Houston TX",
-    "Status":        "Pending Approval",
-    "Body":          content,
-    "Due Date":      today(),
-    "Content Plan":  "Growth",
+    "Content Title":   `Houston Roofing Content — ${stormData?.isStormActive ? "🚨 STORM" : today()}`,
+    "Content Type":    "Social Caption",
+    "Content Niche":   "Roofing",
+    "Content City":    "Houston TX",
+    "Status":          "Pending Approval",
+    "Body":            content,
+    "LinkedIn Post":   extract("LINKEDIN POST", content),
+    "Facebook Post":   extract("FACEBOOK POST", content),
+    "Nextdoor Post":   extract("NEXTDOOR POST", content),
+    "TikTok Hook":     extract("TIKTOK HOOK", content),
+    "Storm Post":      extract("STORM URGENCY POST", content),
+    "Due Date":        today(),
+    "Content Plan":    "Growth",
   });
 
   log("Arthur: Content saved to Airtable.");
