@@ -2,7 +2,9 @@
 //  TAMMM — Totally Automated Money Making Machine
 //  Rayburn Roofing · Houston TX · Kyle Duncan · 30% Commission
 //  Railway Agent · Runs 24/7 · Storm Detection Every 6 Hours
-//  16 Agents · Live NOAA Data · Airtable Integration
+//  UPGRADES: Run Lock · Dupe Prevention · Hunter Agent ·
+//  Storm History · ZIP Ranking · Daily Report · Context Sharing ·
+//  Peter Insurance Upgrade · Houston Market Pulse · Response Learning
 // ═══════════════════════════════════════════════════════════════
 
 const Anthropic = require("@anthropic-ai/sdk");
@@ -22,8 +24,96 @@ const TABLES = {
   agentOutputs:      "tbl14ONswSCjp5EFU",
   metrics:           "tblOdvg1ARhp8pszD",
   subscribers:       "tbl2taK63llf37led",
-  stormAlerts:       "tblOdvg1ARhp8pszD", // logs to metrics table
 };
+
+// ─── UTILITIES ─────────────────────────────────────────────────
+const log   = (msg, level="INFO") => console.log(`[${new Date().toISOString()}] [${level}] ${msg}`);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const today = () => new Date().toISOString().split("T")[0];
+const clock = () => new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" });
+
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 1 — AGENT RUN LOCK
+//  Prevents duplicate cycles from cron + manual /run overlap.
+//  One cycle at a time. Period.
+// ═══════════════════════════════════════════════════════════════
+
+let cycleRunning  = false;
+let cycleType     = "";
+let cycleStart    = null;
+
+function acquireLock(type) {
+  if (cycleRunning) {
+    log(`LOCK: ${type} blocked — ${cycleType} already running since ${cycleStart}`, "WARN");
+    return false;
+  }
+  cycleRunning = true;
+  cycleType    = type;
+  cycleStart   = clock();
+  log(`LOCK: ${type} acquired at ${cycleStart}`);
+  return true;
+}
+
+function releaseLock() {
+  log(`LOCK: ${cycleType} released at ${clock()}`);
+  cycleRunning = false;
+  cycleType    = "";
+  cycleStart   = null;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 2 — DUPLICATE ALERT PREVENTION
+//  Tracks processed NOAA alert IDs so Bruce doesn't fire
+//  emergency content 4 times on the same storm.
+// ═══════════════════════════════════════════════════════════════
+
+const processedAlerts = new Set();
+const alertHistory    = []; // {id, event, area, processedAt}
+
+function isAlertProcessed(alertId) {
+  return processedAlerts.has(alertId);
+}
+
+function markAlertProcessed(alertId, event, area) {
+  processedAlerts.add(alertId);
+  alertHistory.push({ id:alertId, event, area, processedAt:new Date().toISOString() });
+  // Keep only last 100 alerts in memory
+  if (alertHistory.length > 100) alertHistory.shift();
+  log(`Bruce: Alert ${alertId} marked as processed — ${event} · ${area}`);
+}
+
+// Clean processed alerts older than 48 hours (alerts expire)
+function cleanOldAlerts() {
+  const cutoff = Date.now() - (48 * 60 * 60 * 1000);
+  const toRemove = alertHistory.filter(a => new Date(a.processedAt).getTime() < cutoff);
+  toRemove.forEach(a => processedAlerts.delete(a.id));
+  if (toRemove.length > 0) log(`Bruce: Cleaned ${toRemove.length} expired alert IDs`);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 4 — STORM HISTORY DATABASE
+//  Every storm gets logged to Airtable.
+//  After 6 months TAMMM knows which storms generate revenue.
+// ═══════════════════════════════════════════════════════════════
+
+async function logStormHistory(alerts, forecastData) {
+  for (const alert of alerts) {
+    try {
+      await saveToAirtable(TABLES.agentOutputs, {
+        "Date":        today(),
+        "Agent":       "Bruce",
+        "Task Title":  `STORM LOG: ${alert.event} — ${alert.area}`,
+        "Task Output": `Event: ${alert.event}\nArea: ${alert.area}\nSeverity: ${alert.severity}\nUrgency: ${alert.urgency}\nHeadline: ${alert.headline}\nOnset: ${alert.onset}\nExpires: ${alert.expires}\nForecast: ${forecastData?.raw || "N/A"}\nLogged: ${new Date().toISOString()}`,
+        "Status":      "Storm Log",
+        "Niche":       "Roofing",
+      });
+    } catch(e) { log(`Storm history log failed: ${e.message}`, "WARN"); }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  AIRTABLE HELPERS
+// ═══════════════════════════════════════════════════════════════
 
 async function saveToAirtable(tableId, fields) {
   try {
@@ -38,102 +128,104 @@ async function saveToAirtable(tableId, fields) {
   } catch(e) { log(`Airtable save failed: ${e.message}`, "WARN"); }
 }
 
-// ─── UTILITIES ─────────────────────────────────────────────────
-const log   = (msg, level="INFO") => console.log(`[${new Date().toISOString()}] [${level}] ${msg}`);
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const today = () => new Date().toISOString().split("T")[0];
-const clock = () => new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" });
-
 // ═══════════════════════════════════════════════════════════════
-//  BRUCE — LIVE NOAA STORM DETECTION
-//  Checks every 6 hours. Free. No API key needed.
-//  Detects hail, tornadoes, severe thunderstorms near Houston.
+//  CLAUDE API — Haiku for agents, Sonnet for intel
 // ═══════════════════════════════════════════════════════════════
 
-const HOUSTON_ZONE = "TXZ163"; // Harris County (Houston)
-const HOUSTON_COUNTIES = [
-  "Harris",    // Houston core
-  "Fort Bend", // Sugar Land, Missouri City
-  "Brazoria",  // Pearland, Friendswood
-  "Galveston", // Galveston, League City, Webster
-  "Montgomery",// The Woodlands, Conroe, Spring
-  "Waller",    // Katy area
-  "Liberty",   // Humble, Baytown area
-  "Chambers",  // Baytown
-];
+async function callClaude(system, user, maxTok=800, useSonnet=false) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  try {
+    const model = useSonnet ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
+    const res = await ai.messages.create({
+      model,
+      max_tokens: maxTok,
+      system,
+      messages: [{ role:"user", content:user }],
+    });
+    clearTimeout(timeout);
+    return res.content.map(b => b.text || "").join("");
+  } catch(e) {
+    clearTimeout(timeout);
+    log(`Claude error: ${e.message}`, "WARN");
+    return "";
+  }
+}
 
-// Houston area NWS zone codes for alert filtering
-const HOUSTON_ZONES = ["TXZ163","TXZ162","TXZ161","TXZ160","TXZ164","TXZ165","TXZ166","TXZ167","TXZ168","TXZ169"];
-const HOUSTON_FIPS  = ["48201","48157","48039","48167","48339","48473","48291","48071"]; // Harris + surrounding counties
+// ═══════════════════════════════════════════════════════════════
+//  HOUSTON CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+
+const HOUSTON_COUNTIES = ["Harris","Fort Bend","Brazoria","Galveston","Montgomery","Waller","Liberty","Chambers"];
+const HOUSTON_ZONES    = ["TXZ163","TXZ162","TXZ161","TXZ160","TXZ164","TXZ165","TXZ166","TXZ167","TXZ168","TXZ169"];
+const HOUSTON_FIPS     = ["48201","48157","48039","48167","48339","48473","48291","48071"];
+
+const HOUSTON_ZIPS = {
+  "Katy":          ["77449","77450","77494"],
+  "Sugar Land":    ["77478","77479","77498"],
+  "The Woodlands": ["77380","77381","77382","77384","77385","77386","77389"],
+  "Pearland":      ["77581","77584","77588"],
+  "Friendswood":   ["77546","77549"],
+  "Cypress":       ["77429","77433","77447"],
+  "League City":   ["77573","77574"],
+  "Humble":        ["77338","77347","77396"],
+  "Baytown":       ["77520","77521","77522","77523"],
+  "Spring":        ["77373","77379","77388"],
+  "Katy Lakes":    ["77494"],
+  "Kingwood":      ["77339","77345","77346","77365"],
+  "Pasadena":      ["77501","77502","77503","77504","77505","77506","77507","77508"],
+  "Conroe":        ["77301","77302","77303","77304","77305","77306"],
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  BRUCE — LIVE NOAA STORM DETECTION + ZIP RANKING
+// ═══════════════════════════════════════════════════════════════
 
 async function checkNOAAStormAlerts() {
   log("Bruce: Checking NOAA for Houston severe weather alerts...");
-
   try {
-    // Check active alerts for Texas
     const res = await fetch(
       "https://api.weather.gov/alerts/active?area=TX&status=actual&message_type=alert",
-      { headers: { "User-Agent": "TAMMM-RayburnRoofing/1.0 (kyleduncan@gmail.com)", "Accept": "application/geo+json" } }
+      { headers: { "User-Agent": "TAMMM-RayburnRoofing/1.0", "Accept": "application/geo+json" } }
     );
+    if (!res.ok) { log(`NOAA API ${res.status}`, "WARN"); return null; }
 
-    if (!res.ok) {
-      log(`NOAA API returned ${res.status}`, "WARN");
-      return null;
-    }
-
-    const data = await res.json();
+    const data   = await res.json();
     const alerts = data.features || [];
 
-    // Filter for Houston area and severe weather types
     const severeTypes = [
-      "Tornado Warning",
-      "Tornado Watch",
-      "Severe Thunderstorm Warning",
-      "Severe Thunderstorm Watch",
-      "Hail",
-      "Flash Flood Warning",
-      "High Wind Warning",
-      "Hurricane Warning",
-      "Hurricane Watch",
-      "Tropical Storm Warning",
-      "Special Weather Statement",
+      "Tornado Warning","Tornado Watch","Severe Thunderstorm Warning",
+      "Severe Thunderstorm Watch","Flash Flood Warning","High Wind Warning",
+      "Hurricane Warning","Hurricane Watch","Tropical Storm Warning",
     ];
 
     const houstonAlerts = alerts.filter(alert => {
-      const props = alert.properties;
-      const event = props.event || "";
+      const props    = alert.properties;
+      const event    = props.event || "";
       const areaDesc = props.areaDesc || "";
-      const geocode = props.geocode || {};
-      const fips = geocode.SAME || [];
-      const zones = geocode.UGC || [];
-
-      // Check if it's a relevant event type
+      const fips     = props.geocode?.SAME || [];
+      const zones    = props.geocode?.UGC  || [];
       const isRelevant = severeTypes.some(t => event.includes(t)) ||
         event.toLowerCase().includes("hail") ||
-        event.toLowerCase().includes("tornado") ||
         event.toLowerCase().includes("thunderstorm") ||
-        event.toLowerCase().includes("hurricane") ||
-        event.toLowerCase().includes("tropical");
-
-      // Check if it affects Houston area
+        event.toLowerCase().includes("hurricane");
       const isHouston = HOUSTON_COUNTIES.some(c => areaDesc.includes(c)) ||
         HOUSTON_FIPS.some(f => fips.some(fi => fi.includes(f))) ||
         HOUSTON_ZONES.some(z => zones.includes(z)) ||
         areaDesc.toLowerCase().includes("houston") ||
         areaDesc.toLowerCase().includes("harris");
-
       return isRelevant && isHouston;
     });
 
     if (houstonAlerts.length === 0) {
       log("Bruce: No active severe weather alerts for Houston area.");
-      return { hasAlerts: false, alerts: [], summary: "No active severe weather alerts for Houston area." };
+      return { hasAlerts:false, alerts:[], summary:"No active severe weather alerts for Houston area." };
     }
 
-    // Format alerts for use by other agents
     const formatted = houstonAlerts.map(alert => {
       const p = alert.properties;
       return {
+        id:          alert.id || p.id || `${p.event}-${p.onset}`,
         event:       p.event,
         headline:    p.headline,
         description: p.description?.slice(0, 500) || "",
@@ -146,14 +238,25 @@ async function checkNOAAStormAlerts() {
       };
     });
 
+    // UPGRADE 2: Filter out already-processed alerts
+    const newAlerts = formatted.filter(a => !isAlertProcessed(a.id));
+    const dupCount  = formatted.length - newAlerts.length;
+    if (dupCount > 0) log(`Bruce: Skipping ${dupCount} already-processed alert(s) — saving API calls`);
+
     const summary = formatted.map(a =>
-      `⚠ ${a.event} — ${a.area} — Severity: ${a.severity} — ${a.headline}`
+      `⚠ ${a.event} — ${a.area} — ${a.severity} — ${a.headline}`
     ).join("\n");
 
-    log(`Bruce: 🚨 ${houstonAlerts.length} ACTIVE ALERT(S) FOR HOUSTON AREA!`);
-    formatted.forEach(a => log(`  → ${a.event}: ${a.area}`));
-
-    return { hasAlerts: true, count: houstonAlerts.length, alerts: formatted, summary };
+    log(`Bruce: ${houstonAlerts.length} alert(s) found. ${newAlerts.length} new.`);
+    return {
+      hasAlerts:   true,
+      hasNewAlerts: newAlerts.length > 0,
+      count:       houstonAlerts.length,
+      newCount:    newAlerts.length,
+      alerts:      formatted,
+      newAlerts,
+      summary,
+    };
 
   } catch(e) {
     log(`Bruce: NOAA check failed: ${e.message}`, "WARN");
@@ -161,432 +264,488 @@ async function checkNOAAStormAlerts() {
   }
 }
 
-async function checkHailReports() {
-  log("Bruce: Checking for recent hail reports near Houston...");
-
-  try {
-    // SPC storm reports - last 24 hours
-    // Using NWS storm reports endpoint
-    const res = await fetch(
-      "https://api.weather.gov/alerts/active?area=TX&event=Severe+Thunderstorm+Warning&status=actual",
-      { headers: { "User-Agent": "TAMMM-RayburnRoofing/1.0", "Accept": "application/geo+json" } }
-    );
-
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    const alerts = data.features || [];
-
-    // Look for hail mentions in Houston area
-    const hailAlerts = alerts.filter(a => {
-      const desc = (a.properties?.description || "").toLowerCase();
-      const area = (a.properties?.areaDesc || "").toLowerCase();
-      return (desc.includes("hail") || desc.includes("ping pong") || desc.includes("golf ball")) &&
-        (area.includes("harris") || area.includes("houston") || HOUSTON_COUNTIES.some(c => area.includes(c.toLowerCase())));
-    });
-
-    if (hailAlerts.length > 0) {
-      const hailDetails = hailAlerts.map(a => {
-        const desc = a.properties.description || "";
-        const hailMatch = desc.match(/hail(?:\s+up\s+to)?\s+([\d.]+)\s+inch/i);
-        const hailSize = hailMatch ? hailMatch[1] + " inch" : "size unknown";
-        return {
-          area:     a.properties.areaDesc,
-          hailSize,
-          headline: a.properties.headline,
-        };
-      });
-
-      log(`Bruce: 🧊 HAIL DETECTED! ${hailAlerts.length} alert(s) with hail near Houston`);
-      return { hasHail: true, hailAlerts: hailDetails };
-    }
-
-    return { hasHail: false };
-
-  } catch(e) {
-    log(`Bruce: Hail check failed: ${e.message}`, "WARN");
-    return null;
-  }
-}
-
 async function getHoustonForecast() {
   log("Bruce: Fetching Houston 7-day forecast...");
-
   try {
-    // Houston coordinates (downtown)
     const pointRes = await fetch(
       "https://api.weather.gov/points/29.7604,-95.3698",
-      { headers: { "User-Agent": "TAMMM-RayburnRoofing/1.0", "Accept": "application/geo+json" } }
+      { headers: { "User-Agent":"TAMMM-RayburnRoofing/1.0", "Accept":"application/geo+json" } }
     );
-
     if (!pointRes.ok) return null;
 
-    const pointData = await pointRes.json();
+    const pointData   = await pointRes.json();
     const forecastUrl = pointData.properties?.forecast;
-
     if (!forecastUrl) return null;
 
-    const forecastRes = await fetch(forecastUrl, {
-      headers: { "User-Agent": "TAMMM-RayburnRoofing/1.0", "Accept": "application/geo+json" }
-    });
-
+    const forecastRes  = await fetch(forecastUrl, { headers: { "User-Agent":"TAMMM-RayburnRoofing/1.0" } });
     if (!forecastRes.ok) return null;
 
     const forecastData = await forecastRes.json();
-    const periods = forecastData.properties?.periods?.slice(0, 7) || [];
+    const periods      = forecastData.properties?.periods?.slice(0, 7) || [];
 
     const forecast = periods.map(p => ({
-      name:           p.name,
-      temperature:    p.temperature,
-      temperatureUnit:p.temperatureUnit,
-      windSpeed:      p.windSpeed,
-      shortForecast:  p.shortForecast,
-      detailedForecast:p.detailedForecast?.slice(0, 200),
+      name:          p.name,
+      temperature:   p.temperature,
+      windSpeed:     p.windSpeed,
+      shortForecast: p.shortForecast,
     }));
 
-    // Look for storm conditions
     const stormDays = forecast.filter(p =>
       p.shortForecast.toLowerCase().includes("storm") ||
       p.shortForecast.toLowerCase().includes("thunder") ||
-      p.shortForecast.toLowerCase().includes("rain") ||
-      p.shortForecast.toLowerCase().includes("shower")
+      p.shortForecast.toLowerCase().includes("rain")
     );
 
-    log(`Bruce: Houston forecast retrieved. ${stormDays.length} storm/rain day(s) in next 7 days.`);
+    log(`Bruce: Forecast retrieved. ${stormDays.length} storm/rain day(s) ahead.`);
     return { forecast, stormDays, raw: periods.slice(0,3).map(p=>`${p.name}: ${p.shortForecast}`).join(" | ") };
 
   } catch(e) {
-    log(`Bruce: Forecast fetch failed: ${e.message}`, "WARN");
+    log(`Bruce: Forecast failed: ${e.message}`, "WARN");
     return null;
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 5 — ZIP CODE TARGET RANKING
+//  Converts "Houston got a storm" into a ranked target list.
+//  Every agent focuses on these ZIPs in priority order.
+// ═══════════════════════════════════════════════════════════════
+
+function rankHoustonZIPs(alertData, forecastData) {
+  const scores = {};
+
+  // Score based on alert mentions
+  if (alertData?.alerts) {
+    for (const alert of alertData.alerts) {
+      const area = (alert.area + " " + alert.description).toLowerCase();
+      for (const [suburb, zips] of Object.entries(HOUSTON_ZIPS)) {
+        if (area.includes(suburb.toLowerCase())) {
+          scores[suburb] = (scores[suburb] || 0) + 40;
+          if (alert.event?.toLowerCase().includes("hail"))     scores[suburb] += 30;
+          if (alert.severity === "Extreme")                    scores[suburb] += 20;
+          if (alert.severity === "Severe")                     scores[suburb] += 10;
+        }
+      }
+    }
+  }
+
+  // Score based on storm forecast days
+  if (forecastData?.stormDays?.length > 0) {
+    for (const [suburb] of Object.entries(HOUSTON_ZIPS)) {
+      scores[suburb] = (scores[suburb] || 0) + (forecastData.stormDays.length * 5);
+    }
+  }
+
+  // Sort by score descending
+  const ranked = Object.entries(scores)
+    .sort((a,b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([suburb, score], idx) => ({
+      rank: idx + 1,
+      suburb,
+      score,
+      zips: HOUSTON_ZIPS[suburb] || [],
+    }));
+
+  if (ranked.length === 0) {
+    // Default ranking when no storm — based on commercial density
+    return [
+      { rank:1, suburb:"The Woodlands", score:50, zips:HOUSTON_ZIPS["The Woodlands"] },
+      { rank:2, suburb:"Katy",          score:45, zips:HOUSTON_ZIPS["Katy"] },
+      { rank:3, suburb:"Sugar Land",    score:40, zips:HOUSTON_ZIPS["Sugar Land"] },
+      { rank:4, suburb:"Pearland",      score:35, zips:HOUSTON_ZIPS["Pearland"] },
+      { rank:5, suburb:"Cypress",       score:30, zips:HOUSTON_ZIPS["Cypress"] },
+    ];
+  }
+
+  return ranked;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 3 — HUNTER AGENT
+//  Builds actual prospect lists from storm-affected ZIP codes.
+//  The missing piece between detecting opportunity and revenue.
+// ═══════════════════════════════════════════════════════════════
+
+async function runHunter(rankedZIPs, stormData) {
+  log("Hunter: Building prospect lists for top ZIP codes...");
+
+  const topZIPs = rankedZIPs.slice(0, 3);
+  const isStorm = stormData?.isStormActive;
+
+  const prospectLists = await callClaude(
+    `You are Hunter, Lead Prospector for Rayburn Roofing in Houston Texas. Kyle Duncan earns 30% commission. Your job is to build actual prospect lists — real business types with real contact strategies. Be specific to Houston Texas. Results may vary.`,
+    `TOP TARGET ZONES TODAY (ranked by opportunity):
+${topZIPs.map(z => `${z.rank}. ${z.suburb} — ZIPs: ${z.zips.join(", ")} — Score: ${z.score}`).join("\n")}
+
+Storm active: ${isStorm ? "YES — emergency outreach mode" : "No — standard outreach"}
+
+Generate COMPLETE PROSPECT HUNTING BRIEF:
+
+APARTMENT COMPLEXES TO TARGET (label it): In ${topZIPs[0]?.suburb} and ${topZIPs[1]?.suburb} — types of apartment complexes to search for on Google Maps. Search strings to use. What to look for on their websites to find property manager contact info. Expected response rate for roofing inspections.
+
+HOA COMMUNITIES TO TARGET (label it): HOA communities in ${topZIPs.map(z=>z.suburb).join(", ")} — how to find HOA managers. What databases are free. What to say in first contact. Why HOA managers are worth 50+ roofs in one relationship.
+
+COMMERCIAL STRIP CENTERS (label it): Strip malls and commercial centers in these ZIP codes: ${topZIPs.flatMap(z=>z.zips).join(", ")}. Google Maps search terms. How to find the property owner vs the tenant. Who makes the roofing decision.
+
+CHURCHES AND INSTITUTIONS (label it): Large churches, schools, and community centers in ${topZIPs[0]?.suburb} and ${topZIPs[1]?.suburb}. Why they are underserved by roofing companies. How to approach facilities managers. Free inspection angle.
+
+GOOGLE MAPS SEARCH STRINGS (label it): Copy-paste ready search strings Kyle uses RIGHT NOW to find prospects in these ZIP codes. One per line. Minimum 10 search strings.
+
+IMMEDIATE OUTREACH PRIORITY (label it): Based on storm status — which prospect TYPE Kyle contacts first today and exactly what he says in the first message. Under 60 words. Ready to copy.`,
+    900
+  );
+
+  await saveToAirtable(TABLES.agentOutputs, {
+    "Date":        today(),
+    "Agent":       "Hunter",
+    "Task Title":  `Prospect Lists — ${topZIPs.map(z=>z.suburb).join(", ")} — ${isStorm ? "STORM MODE" : today()}`,
+    "Task Output": `ZIP RANKINGS:\n${rankedZIPs.map(z=>`${z.rank}. ${z.suburb} (Score: ${z.score})`).join("\n")}\n\n${prospectLists}`,
+    "Status":      "Completed",
+    "Niche":       "Roofing",
+  });
+
+  log("Hunter: Prospect lists saved to Airtable.");
+  return prospectLists;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 7 (IDEA 2) — HOUSTON MARKET PULSE
+//  Scans free public RSS feeds every Monday morning.
+//  Tommy reads real Houston news before generating intel.
+// ═══════════════════════════════════════════════════════════════
+
+async function fetchHoustonMarketPulse() {
+  log("Market Pulse: Scanning Houston RSS feeds...");
+  const feeds = [
+    "https://www.chron.com/news/houston-texas/rss/",
+    "https://www.bizjournals.com/houston/stories.rss",
+    "https://www.houstonchronicle.com/local/news/feed/",
+  ];
+
+  const results = [];
+
+  for (const url of feeds) {
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "TAMMM-RayburnRoofing/1.0" },
+        signal:  AbortSignal.timeout(8000),
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+
+      // Extract headlines from RSS
+      const titles   = [...text.matchAll(/<title>(.*?)<\/title>/g)].slice(1, 8).map(m => m[1].replace(/<!\[CDATA\[|\]\]>/g,"").trim());
+      const keywords = ["storm","roof","hail","construction","commercial","property","building","HOA","flood","hurricane"];
+      const relevant = titles.filter(t => keywords.some(k => t.toLowerCase().includes(k)));
+
+      if (relevant.length > 0) results.push(...relevant);
+    } catch(e) {
+      log(`Market Pulse: Feed failed — ${url} — ${e.message}`, "WARN");
+    }
+  }
+
+  if (results.length === 0) {
+    log("Market Pulse: No relevant headlines found from RSS feeds.");
+    return null;
+  }
+
+  log(`Market Pulse: ${results.length} relevant Houston headlines found.`);
+  return results.slice(0, 10).join("\n");
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPGRADE 5 — DOWNSTREAM CONTEXT SHARING
+//  Tommy runs first and builds a shared context object.
+//  All other agents read from it — no overlapping questions.
+// ═══════════════════════════════════════════════════════════════
+
 async function runBruceStormCheck() {
   log("═══════════════════════════════════════");
-  log("BRUCE — STORM DETECTION CYCLE STARTING");
+  log("BRUCE — STORM DETECTION CYCLE");
   log(`Time: ${clock()}`);
   log("═══════════════════════════════════════");
 
-  const [alertData, hailData, forecastData] = await Promise.all([
+  cleanOldAlerts();
+
+  const [alertData, forecastData] = await Promise.all([
     checkNOAAStormAlerts(),
-    checkHailReports(),
     getHoustonForecast(),
   ]);
 
-  const hasActiveAlerts = alertData?.hasAlerts || false;
-  const hasHail         = hailData?.hasHail || false;
-  const isStormActive   = hasActiveAlerts || hasHail;
+  const isStormActive  = alertData?.hasAlerts || false;
+  const hasNewAlerts   = alertData?.hasNewAlerts || false;
 
-  // Build Bruce's intelligence report
+  // UPGRADE 4: Log storm history for every new alert
+  if (isStormActive && alertData.newAlerts?.length > 0) {
+    await logStormHistory(alertData.newAlerts, forecastData);
+    // Mark alerts as processed
+    alertData.newAlerts.forEach(a => markAlertProcessed(a.id, a.event, a.area));
+  }
+
+  // UPGRADE 5: ZIP Code Target Ranking
+  const rankedZIPs = rankHoustonZIPs(alertData, forecastData);
+  log(`Bruce: Top ZIP targets: ${rankedZIPs.slice(0,3).map(z=>z.suburb).join(", ")}`);
+
   let stormReport = "";
 
   if (isStormActive) {
     stormReport += "🚨 STORM PROTOCOL ACTIVE 🚨\n\n";
-
-    if (hasActiveAlerts) {
-      stormReport += `ACTIVE NWS ALERTS (${alertData.count}):\n${alertData.summary}\n\n`;
-    }
-
-    if (hasHail) {
-      stormReport += `HAIL REPORTS:\n`;
-      hailData.hailAlerts.forEach(h => {
-        stormReport += `• ${h.area} — ${h.hailSize} hail — ${h.headline}\n`;
-      });
-      stormReport += "\n";
-    }
-
+    stormReport += `ACTIVE NWS ALERTS (${alertData.count}):\n${alertData.summary}\n\n`;
+    if (!hasNewAlerts) stormReport += "NOTE: All active alerts already processed — no duplicate content generated.\n\n";
     stormReport += "IMMEDIATE ACTIONS FOR KYLE:\n";
-    stormReport += "1. Post Arthur's Storm Urgency Post in ALL Houston Facebook groups NOW\n";
-    stormReport += "2. Send Kyle Duncan's emergency DM to all property managers immediately\n";
+    stormReport += "1. Post Arthur's Storm Post in ALL Houston Facebook groups NOW\n";
+    stormReport += "2. Send Kyle Duncan's emergency DM to all warm leads immediately\n";
     stormReport += "3. Post on Nextdoor in ALL Houston area neighborhoods\n";
-    stormReport += "4. Call uncle at Rayburn Roofing — prepare for inspection surge\n";
-    stormReport += "5. Check affected neighborhoods and prioritize outreach there first\n";
-
-    if (alertData?.alerts?.length > 0) {
-      const topAlert = alertData.alerts[0];
-      stormReport += `\nMOST URGENT: ${topAlert.event} affecting ${topAlert.area}\n`;
-      if (topAlert.instruction) stormReport += `NWS INSTRUCTION: ${topAlert.instruction}\n`;
-    }
+    stormReport += "4. Call Rayburn Roofing — prepare for inspection surge\n";
   } else {
     stormReport += "✅ No active severe weather alerts for Houston area.\n\n";
   }
 
+  stormReport += `ZIP CODE TARGET RANKING:\n${rankedZIPs.map(z=>`${z.rank}. ${z.suburb} — ZIPs: ${z.zips.join(", ")} — Score: ${z.score}`).join("\n")}\n\n`;
+
   if (forecastData?.raw) {
-    stormReport += `HOUSTON 7-DAY FORECAST:\n${forecastData.raw}\n\n`;
+    stormReport += `HOUSTON 7-DAY FORECAST:\n${forecastData.raw}\n`;
     if (forecastData.stormDays?.length > 0) {
-      stormReport += `UPCOMING STORM DAYS: ${forecastData.stormDays.map(d=>d.name).join(", ")}\n`;
-      stormReport += "→ Kyle should begin pre-storm outreach in these neighborhoods NOW.\n";
+      stormReport += `STORM DAYS AHEAD: ${forecastData.stormDays.map(d=>d.name).join(", ")}\n`;
     }
   }
 
-  // Generate Bruce's AI analysis using real weather data
-  if (stormReport) {
-    try {
-      const bruceAnalysis = await callClaude(
-        `You are Bruce, Storm Predictor for Rayburn Roofing in Houston Texas. You have access to REAL live weather data. Kyle Duncan earns 30% commission on every roofing job. Generate aggressive, specific, revenue-focused analysis. Results may vary.`,
-        `Here is today's REAL NOAA weather data for Houston:\n\n${stormReport}\n\nBased on this LIVE data, generate Bruce's complete storm intelligence brief:\n\nSTORM STATUS (label it): Current alert status with exact details from the NOAA data above.\n\nIMMEDIATE REVENUE OPPORTUNITY (label it): If any storm activity — exact dollar opportunity. Which Houston neighborhoods to target first. How many potential jobs. Kyle's 30% at $8K-$15K per job. Results may vary.\n\nPRE-STORM POSITIONING (label it): Based on the 7-day forecast — which neighborhoods Kyle starts working RIGHT NOW before any storms hit. Specific suburb names.\n\nSTORM CONTENT TO POST IMMEDIATELY (label it): The exact Facebook post, Nextdoor post, and LinkedIn message Kyle copies and sends RIGHT NOW based on this real weather data. Ready to copy and paste.\n\nWEATHER-BASED OUTREACH ANGLE (label it): How Kyle uses today's specific Houston weather — exact temperatures, wind, rain — as a roofing conversation starter in every message today.\n\nNOAA DATA SOURCE: ${forecastData?.raw || "api.weather.gov"}`
-      );
-
-      stormReport += "\n\nBRUCE AI ANALYSIS:\n" + bruceAnalysis;
-    } catch(e) {
-      log(`Bruce AI analysis failed: ${e.message}`, "WARN");
-    }
-  }
-
-  // Save to Airtable
   await saveToAirtable(TABLES.agentOutputs, {
     "Date":        today(),
     "Agent":       "Bruce",
-    "Task Title":  `Storm Detection — ${isStormActive ? "🚨 ALERTS ACTIVE" : "All Clear"}`,
+    "Task Title":  `Storm Check — ${isStormActive ? "🚨 ACTIVE" : "Clear"} — ${clock()}`,
     "Task Output": stormReport,
     "Status":      "Completed",
     "Niche":       "Roofing",
   });
 
-  // If storm is active — also log as priority metric
-  if (isStormActive) {
-    await saveToAirtable(TABLES.metrics, {
-      "Date":  today(),
-      "Notes": `⚠ STORM ALERT: ${alertData?.count || 0} NWS alert(s) active for Houston. Hail detected: ${hasHail}. ACTIVATE STORM PROTOCOL NOW.`,
-    });
-  }
-
-  log(`Bruce: Storm check complete. Active: ${isStormActive}. Report saved to Airtable.`);
-  return { isStormActive, hasAlerts: hasActiveAlerts, hasHail, stormReport, forecastData };
+  log(`Bruce: Complete. Storm active: ${isStormActive}. New alerts: ${hasNewAlerts}.`);
+  return { isStormActive, hasNewAlerts, hasAlerts:isStormActive, stormReport, forecastData, rankedZIPs, alertData };
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  CLAUDE API
+//  TOMMY — INTELLIGENCE WITH SHARED CONTEXT + MARKET PULSE
 // ═══════════════════════════════════════════════════════════════
 
-async function callClaude(system, user, maxTok=1000) {
-  try {
-    const res = await ai.messages.create({
-      model:      "claude-haiku-4-5-20251001",
-      max_tokens: maxTok,
-      system,
-      messages:   [{ role:"user", content:user }],
-    });
-    return res.content.map(b => b.text || "").join("");
-  } catch(e) {
-    log(`Claude error: ${e.message}`, "WARN");
-    return "";
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  TOMMY — DAILY HOUSTON INTELLIGENCE
-// ═══════════════════════════════════════════════════════════════
-
-async function runTommy(stormData) {
+async function runTommy(sharedContext) {
   log("Tommy: Running daily Houston roofing intelligence...");
 
-  const stormContext = stormData?.isStormActive
-    ? `LIVE STORM DATA: ${stormData.stormReport?.slice(0, 500)}`
-    : `Weather: ${stormData?.forecastData?.raw || "No active storm alerts for Houston"}`;
+  const { stormReport, forecastData, rankedZIPs, marketPulse } = sharedContext;
+
+  const topZIPNames = rankedZIPs?.slice(0,5).map(z=>z.suburb).join(", ") || "Katy, Sugar Land, The Woodlands, Pearland, Cypress";
 
   const intel = await callClaude(
-    `You are Tommy, Intelligence Officer for Rayburn Roofing in Houston Texas. Kyle Duncan earns 30% commission. You have access to live NOAA weather data today. Generate aggressive, Houston-specific, revenue-focused intelligence. Never guarantee outcomes. Results may vary.`,
-    `${stormContext}
+    `You are Tommy, Intelligence Officer for Rayburn Roofing in Houston Texas. Kyle Duncan earns 30% commission. You have live NOAA weather data AND real Houston market news. Generate aggressive, specific, revenue-focused intelligence. Never guarantee outcomes. Results may vary.`,
+    `LIVE NOAA DATA:
+${stormReport?.slice(0, 400) || "No active storm alerts."}
 
-Generate today's COMPLETE INTELLIGENCE BRIEFING:
+TOP TARGET ZONES TODAY (ranked by opportunity):
+${rankedZIPs?.slice(0,5).map(z=>`${z.rank}. ${z.suburb}`).join("\n") || topZIPNames}
 
-STORM STATUS (label it): Based on LIVE NOAA data above — current weather situation in Houston and impact on roofing opportunities.
+${marketPulse ? `REAL HOUSTON MARKET NEWS THIS WEEK:\n${marketPulse}\n` : ""}
 
-TOP COMMERCIAL OPPORTUNITY (label it): Single highest-value commercial target in Houston today. Specific property type, neighborhood. What Kyle does about it TODAY.
+Generate TODAY'S COMPLETE INTELLIGENCE BRIEFING:
 
-TOP RESIDENTIAL OPPORTUNITY (label it): Highest-volume residential opportunity. Specific Houston suburb. Why it's hot right now.
+STORM STATUS (label it): Current Houston weather impact on roofing opportunities.
 
-WEATHER WEAPONIZATION (label it): Based on REAL Houston weather today — how Kyle uses specific weather conditions as a roofing conversation starter in every message.
+TOP COMMERCIAL OPPORTUNITY (label it): Highest-value commercial target TODAY. Specific property type and one of these suburbs: ${topZIPNames}. Why now. What Kyle does today.
 
-PRIORITY ACTION — FIRST 60 MINUTES (label it): The 3 most important things Kyle does in his first 60 minutes today. Revenue-focused. Specific.
+TOP RESIDENTIAL OPPORTUNITY (label it): Highest-volume residential target. Specific suburb from top zones. Why it's hot.
 
-AGENT DIRECTIVES (label it): Brief directive for Arthur, Kyle Duncan, Polly, Michael, Scout, Charlie, Curly, Finn, Peter, Bruce.`, 1200
+WEATHER WEAPONIZATION (label it): How Kyle uses today's real Houston weather as a roofing conversation starter. Specific and actionable.
+
+ZIP CODE FOCUS (label it): Top 3 ZIP codes Kyle targets today and why. Specific outreach approach for each.
+
+PRIORITY ACTION — FIRST 60 MINUTES (label it): The 3 most important revenue actions. Specific. No fluff.
+
+MARKET INTELLIGENCE (label it): One real insight from Houston news today that Kyle uses as a conversation starter with property managers.`,
+    900, true // use Sonnet for Tommy — he's the brain
   );
 
   await saveToAirtable(TABLES.dailyIntelligence, {
-    "Date":           today(),
-    "Top Niche":      "Roofing",
-    "Market Summary": stormData?.isStormActive
-      ? `🚨 STORM ACTIVE — ${stormData.stormReport?.slice(0,100)}`
-      : `Daily intelligence complete. ${stormData?.forecastData?.raw?.slice(0,100) || ""}`,
-    "Roofing Brief":  intel,
+    "Date":             today(),
+    "Top Niche":        "Roofing",
+    "Market Summary":   sharedContext.isStormActive
+      ? `🚨 STORM ACTIVE — ${stormReport?.slice(0,100)}`
+      : `Clear. Top zones: ${topZIPNames}`,
+    "Roofing Brief":    intel,
     "Agent Directives": intel.slice(0, 500),
   });
 
-  log("Tommy: Intelligence saved to Airtable.");
+  log("Tommy: Intelligence saved.");
   return intel;
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ARTHUR — CONTENT GENERATION
+//  ARTHUR — CONTENT GENERATION (ZIP-AWARE)
 // ═══════════════════════════════════════════════════════════════
 
-async function runArthur(stormData, intel) {
+async function runArthur(sharedContext, intel) {
   log("Arthur: Writing Houston roofing content...");
 
-  const weatherHook = stormData?.isStormActive
-    ? `URGENT: Active storm alerts in Houston. Create storm emergency content.`
-    : `Weather: ${stormData?.forecastData?.forecast?.[0]?.shortForecast || "Houston summer heat"}`;
+  const { isStormActive, rankedZIPs, forecastData } = sharedContext;
+  const topSuburb  = rankedZIPs?.[0]?.suburb || "Katy";
+  const secondSuburb = rankedZIPs?.[1]?.suburb || "Sugar Land";
+  const weatherHook = isStormActive
+    ? "URGENT: Active storm alerts in Houston. Create storm emergency content."
+    : `Weather: ${forecastData?.forecast?.[0]?.shortForecast || "Houston summer heat"}`;
 
   const content = await callClaude(
-    `You are Arthur, Content Director for Rayburn Roofing in Houston Texas. Kyle earns 30% commission. Write content that generates leads. Never guarantee outcomes. Results may vary.`,
+    `You are Arthur, Content Director for Rayburn Roofing in Houston Texas. Kyle earns 30% commission. HARD RULE: Every post MUST be under 80 words. Focus on ${topSuburb} and ${secondSuburb} today — these are the highest-opportunity zones. Never guarantee outcomes. Results may vary.`,
     `${weatherHook}
-Intel: ${intel?.slice(0,300) || "Houston roofing market"}
+TOP ZONES TODAY: ${topSuburb} (#1), ${secondSuburb} (#2)
+Intel: ${intel?.slice(0,200) || "Houston roofing opportunities"}
 
-Write today's COMPLETE CONTENT PACKAGE:
+Write COMPLETE CONTENT PACKAGE — ALL POSTS UNDER 80 WORDS:
 
-FACEBOOK POST (label it): Under 120 words. ${stormData?.isStormActive ? "URGENT storm damage post." : "Hyperlocal Houston hook."} Free Rayburn Roofing inspection. Sounds like a helpful neighbor.
+FACEBOOK POST (label it): Under 80 words. Mention ${topSuburb} specifically. Free Rayburn Roofing inspection. Neighbor tone not ad.
 
-LINKEDIN POST (label it): Under 150 words. Targets Houston property managers. Free commercial inspection.
+LINKEDIN POST (label it): Under 80 words. Houston commercial property managers. Professional. Free commercial inspection. One question at end.
 
-NEXTDOOR POST (label it): Under 80 words. ${stormData?.isStormActive ? "Storm damage warning for Houston neighborhoods." : "Trusted neighbor tone. Specific Houston suburb."}
+NEXTDOOR POST (label it): Under 60 words. Neighbor tone. Mention ${secondSuburb}. Free Rayburn Roofing inspection.
 
-TIKTOK HOOK (label it): First line stops scroll in 2 seconds. Under 60 words. Houston-specific.
+TIKTOK HOOK (label it): Under 50 words. First line stops scroll. Houston roofing tip. Free inspection CTA.
 
-STORM URGENCY POST (label it): ${stormData?.isStormActive ? "EMERGENCY post based on ACTIVE alerts. Maximum urgency." : "Pre-storm awareness post. Seasonal angle."}`, 1200
+STORM POST (label it): Under 80 words. ${isStormActive ? `EMERGENCY — active storm in ${topSuburb}. Maximum urgency.` : `Pre-storm awareness for ${topSuburb}. Seasonal angle.`} Same-day Rayburn Roofing inspection.
+
+PROPERTY MANAGER EMAIL (label it): Subject line + body. Under 100 words total. Contractor reliability pain point. Free commercial inspection in ${topSuburb}.
+
+GOOGLE BUSINESS POST (label it): Under 80 words. Trust-building. Houston service area. Free inspection.`,
+    900
   );
 
-  // Robust extraction — tries multiple patterns to handle any Claude output format
+  // Extract each post type into its own field
   const extractPost = (label, text) => {
     try {
-      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const patterns = [
-        escaped + "\\s*\\([^)]*\\)\\s*:[\\s\\S]*?\\n([\\s\\S]*?)(?=\\n[A-Z][A-Z\\s]{3,}(?:POST|HOOK|EMAIL|URGENCY|BUSINESS)|$)",
-        escaped + "[^:\\n]*:([\\s\\S]*?)(?=\\n[A-Z][A-Z\\s]{3,}(?:POST|HOOK|EMAIL|URGENCY|BUSINESS)|$)",
-        escaped + "[^:\\n]*:([\\s\\S]*?)(?=\\n\\n[A-Z]|$)",
-      ];
-      for (const pattern of patterns) {
-        try {
-          const match = text.match(new RegExp(pattern, "i"));
-          if (match) {
-            const extracted = (match[1] || match[0]).trim();
-            if (extracted.length > 15) return extracted.slice(0, 500);
-          }
-        } catch(e2) { continue; }
-      }
-      // Fallback: find the label line and take the next paragraph
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].toLowerCase().includes(label.toLowerCase())) {
           const parts = [];
           let j = i + 1;
-          while (j < lines.length && j < i + 10) {
+          while (j < lines.length && parts.length < 8) {
             const line = lines[j].trim();
-            if (!line) { j++; continue; }
-            // Stop if we hit the next section label
-            if (/^[A-Z][A-Z\s]{3,}:/.test(line) && !line.startsWith("http")) break;
-            parts.push(line);
             j++;
+            if (!line) continue;
+            if (/^[A-Z][A-Z\s]{3,}:/.test(line) || line.includes("(label it)")) break;
+            parts.push(line);
           }
           const result = parts.join(" ").trim();
-          if (result.length > 15) return result.slice(0, 500);
+          if (result.length > 10) return result.slice(0, 500);
         }
       }
       return "";
-    } catch(e) {
-      log("extractPost error for " + label + ": " + e.message, "WARN");
-      return "";
-    }
+    } catch(e) { return ""; }
   };
 
-  const linkedinPost  = extractPost("LINKEDIN POST", content);
-  const facebookPost  = extractPost("FACEBOOK POST", content);
-  const nextdoorPost  = extractPost("NEXTDOOR POST", content);
-  const tiktokHook    = extractPost("TIKTOK HOOK", content);
-  const stormPost     = extractPost("STORM POST", content) || extractPost("STORM URGENCY POST", content);
-
-  log("Arthur extracted — LinkedIn: " + linkedinPost.slice(0,50) + "...");
-  log("Arthur extracted — Facebook: " + facebookPost.slice(0,50) + "...");
-
   await saveToAirtable(TABLES.contentQueue, {
-    "Content Title":  "Rayburn Roofing — " + new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+    "Content Title":  `Rayburn Roofing — ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})}`,
     "Content Type":   "Social Caption",
     "Content Niche":  "Roofing",
-    "Content City":   "Houston TX",
+    "Content City":   `Houston TX — ${topSuburb}`,
     "Status":         "Pending Approval",
     "Body":           content,
-    "LinkedIn Post":  linkedinPost,
-    "Facebook Post":  facebookPost,
-    "Nextdoor Post":  nextdoorPost,
-    "TikTok Hook":    tiktokHook,
-    "Storm Post":     stormPost,
+    "LinkedIn Post":  extractPost("LINKEDIN POST", content),
+    "Facebook Post":  extractPost("FACEBOOK POST", content),
+    "Nextdoor Post":  extractPost("NEXTDOOR POST", content),
+    "TikTok Hook":    extractPost("TIKTOK HOOK", content),
+    "Storm Post":     extractPost("STORM POST", content),
     "Due Date":       today(),
     "Content Plan":   "Growth",
   });
 
-  log("Arthur: Content saved with separate post fields.");
+  log(`Arthur: Content saved. Top zone: ${topSuburb}.`);
   return content;
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  KYLE DUNCAN — OUTREACH SCRIPTS
+//  KYLE DUNCAN — OUTREACH (ZIP-AWARE)
 // ═══════════════════════════════════════════════════════════════
 
-async function runKyleDuncan(stormData, intel) {
+async function runKyleDuncan(sharedContext, intel) {
   log("Kyle Duncan: Writing Houston outreach scripts...");
 
+  const { isStormActive, rankedZIPs } = sharedContext;
+  const topZones = rankedZIPs?.slice(0,3).map(z=>z.suburb).join(", ") || "Katy, Sugar Land, The Woodlands";
+
   const scripts = await callClaude(
-    `You are Kyle Duncan, Lead Outreach Specialist for Rayburn Roofing in Houston Texas. 30% commission. Write outreach that starts conversations and books free inspections. Never guarantee outcomes. Results may vary.`,
-    `${stormData?.isStormActive ? "STORM ACTIVE in Houston — lead with storm damage angle." : "Standard Houston outreach day."}
+    `You are Kyle Duncan, Lead Outreach Specialist for Rayburn Roofing in Houston Texas. 30% commission. Write outreach that starts conversations and books free inspections. Focus today on: ${topZones}. Never guarantee outcomes. Results may vary.`,
+    `${isStormActive ? `STORM ACTIVE — lead with storm damage angle. Focus on ${topZones}.` : `Standard outreach. Focus zones: ${topZones}.`}
 Intel: ${intel?.slice(0,200) || "Houston property managers"}
 
-Write the COMPLETE OUTREACH KIT:
+Write COMPLETE OUTREACH KIT for Houston Texas — focus on ${topZones}:
 
-CONNECTION REQUEST — PROPERTY MANAGER (label it): Under 200 chars. Personal. Rayburn Roofing. Free inspection.
-FIRST DM — PROPERTY MANAGER (label it): Under 75 words. References Houston buildings. Free commercial inspection.
-FIRST DM — HOMEOWNER (label it): Under 60 words. ${stormData?.isStormActive ? "Storm damage angle." : "Specific Houston suburb."} Free inspection.
-FOLLOW UP — DAY 3 (label it): Under 55 words. Different angle. New hook.
-OBJECTION — ALREADY HAVE A ROOFER (label it): Under 65 words. Free second opinion.
-FACEBOOK GROUP COMMENT (label it): Under 65 words. Natural. Helpful.
-${stormData?.isStormActive ? "STORM EMERGENCY DM (label it): Under 60 words. URGENT. For active storm situation in Houston. Send to all warm leads NOW." : "INSPECTION BOOKING CLOSE (label it): Under 80 words. Removes friction. Confirms appointment."}`, 1000
+CONNECTION REQUEST — PROPERTY MANAGER (label it): Under 200 chars. References ${rankedZIPs?.[0]?.suburb || "Houston"}. Rayburn Roofing. Free commercial inspection.
+
+FIRST DM — PROPERTY MANAGER (label it): Under 75 words. References their ${rankedZIPs?.[0]?.suburb || "Houston"} buildings specifically. Free Rayburn Roofing commercial inspection.
+
+FIRST DM — HOMEOWNER (label it): Under 60 words. Mentions ${rankedZIPs?.[1]?.suburb || "Sugar Land"} specifically. ${isStormActive ? "Storm damage angle." : "Weather angle."} Free inspection.
+
+FOLLOW UP — DAY 3 (label it): Under 55 words. Different angle. References ${topZones}.
+
+OBJECTION — ALREADY HAVE A ROOFER (label it): Under 65 words. Free second opinion positioning.
+
+FACEBOOK GROUP COMMENT (label it): Under 65 words. Natural. Helpful. For Houston neighborhood groups.
+
+${isStormActive ? `STORM EMERGENCY DM (label it): Under 60 words. URGENT. Storm active in ${rankedZIPs?.[0]?.suburb || "Houston"}. Send to all warm leads NOW.` : `INSPECTION BOOKING CLOSE (label it): Under 80 words. Removes friction. Confirms appointment. Results may vary.`}`,
+    800
   );
 
   await saveToAirtable(TABLES.agentOutputs, {
     "Date":        today(),
     "Agent":       "Kyle Duncan",
-    "Task Title":  `Houston Outreach Scripts — ${stormData?.isStormActive ? "STORM MODE" : today()}`,
+    "Task Title":  `Outreach Scripts — ${topZones} — ${isStormActive ? "STORM" : today()}`,
     "Task Output": scripts,
     "Status":      "Completed",
     "Niche":       "Roofing",
   });
 
-  log("Kyle Duncan: Outreach scripts saved to Airtable.");
+  log("Kyle Duncan: Scripts saved.");
   return scripts;
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  PETER — INSURANCE INTELLIGENCE
+//  PETER — INSURANCE WHISPERER (UPGRADED)
+//  Now includes carrier intelligence — State Farm, Allstate,
+//  Farmers, USAA specific documentation and supplement patterns.
 // ═══════════════════════════════════════════════════════════════
 
-async function runPeter(stormData) {
-  log("Peter: Generating insurance claim intelligence...");
+async function runPeter(sharedContext) {
+  log("Peter: Generating insurance intelligence...");
 
-  const isStorm = stormData?.isStormActive;
+  const { isStormActive, stormReport, rankedZIPs } = sharedContext;
+  const topZone = rankedZIPs?.[0]?.suburb || "Houston";
 
   const insurance = await callClaude(
-    `You are Peter, Insurance Whisperer for Rayburn Roofing in Houston Texas. You help homeowners and property managers navigate insurance claims to maximize payouts. You make Kyle indispensable. Results may vary by policy and insurer.`,
-    `${isStorm ? "LIVE STORM ACTIVE in Houston — insurance claims will be filed immediately." : "Standard insurance intelligence day."}
+    `You are Peter, Insurance Whisperer for Rayburn Roofing in Houston Texas. You help Houston homeowners navigate insurance claims to maximize payouts. You know how each major carrier operates in Texas. Results may vary by policy and insurer.`,
+    `${isStormActive ? `LIVE STORM ACTIVE in ${topZone} — insurance claims will be filed immediately.` : `Standard insurance day in ${topZone}.`}
 
-Generate today's INSURANCE BRIEF:
+Generate COMPLETE INSURANCE BRIEF:
 
-${isStorm ? `EMERGENCY CLAIM GUIDANCE (label it): Houston storm is ACTIVE right now. Exact guidance Kyle gives homeowners in the next 24 hours to document damage and file claims properly. Step by step. Time-sensitive.
+${isStormActive ? `EMERGENCY CLAIM GUIDANCE (label it): Storm active in ${topZone}. Step-by-step guidance Kyle gives homeowners in the next 24 hours. Time-sensitive.
 
-ADJUSTER TIMELINE (label it): How fast insurance companies typically deploy adjusters after a Houston storm. What homeowners should do while waiting. How Kyle helps in the meantime.` : `CLAIM ELIGIBILITY GUIDE (label it): How Kyle determines in 5 minutes if a homeowner has a legitimate claim. Exact questions. Signs of strong vs weak claim. Results may vary.
+ADJUSTER TIMELINE (label it): How fast major Texas insurers deploy adjusters after a Houston storm — State Farm, Allstate, Farmers, USAA typical timelines. What homeowners do while waiting.` : `CLAIM ELIGIBILITY GUIDE (label it): How Kyle determines in 5 minutes if a ${topZone} homeowner has a legitimate claim. Exact questions. Results may vary.
 
-DOCUMENTATION CHECKLIST (label it): Exactly what the homeowner photographs before the adjuster arrives. Specific shots and why each matters.`}
+DOCUMENTATION CHECKLIST (label it): Exactly what the homeowner photographs before adjuster arrives. Specific shots and why each matters.`}
 
-ADJUSTER PREPARATION SCRIPT (label it): Word-for-word coaching Kyle gives homeowners before the adjuster arrives. What to say. What NOT to say. How to avoid getting lowballed.
+CARRIER INTELLIGENCE (label it): How the top 4 Houston insurance carriers handle roofing claims differently:
+STATE FARM: typical documentation requests, supplement stance, timeline
+ALLSTATE: what they commonly dispute, how to counter
+FARMERS: supplement opportunities they commonly miss
+USAA: their process for military homeowners in Houston — typically faster
+
+ADJUSTER PREPARATION SCRIPT (label it): Word-for-word coaching Kyle gives homeowners before the adjuster arrives. What to say. What NOT to say.
 
 SUPPLEMENT REQUEST GUIDE (label it): Most missed supplements in Houston claims — ice shield, drip edge, code upgrades, permits, pipe boots. Dollar value of each.
 
-KYLE VALUE PROPOSITION (label it): How Kyle positions himself as an insurance advocate. The script that makes him irreplaceable. Under 80 words.`, 1000
+KYLE VALUE PROPOSITION (label it): The exact script Kyle uses to position himself as a Houston insurance advocate. Under 80 words. Makes him irreplaceable.`,
+    900
   );
 
   await saveToAirtable(TABLES.agentOutputs, {
     "Date":        today(),
     "Agent":       "Peter",
-    "Task Title":  `Insurance Intelligence — ${isStorm ? "🚨 STORM CLAIMS ACTIVE" : today()}`,
+    "Task Title":  `Insurance Intel — ${isStormActive ? "🚨 STORM CLAIMS" : today()} — ${topZone}`,
     "Task Output": insurance,
     "Status":      "Completed",
     "Niche":       "Roofing",
@@ -600,28 +759,33 @@ KYLE VALUE PROPOSITION (label it): How Kyle positions himself as an insurance ad
 //  WANDA — COMPETITOR MONITORING
 // ═══════════════════════════════════════════════════════════════
 
-async function runWanda() {
+async function runWanda(sharedContext) {
   log("Wanda: Running competitor monitoring...");
 
+  const topZones = sharedContext.rankedZIPs?.slice(0,3).map(z=>z.suburb).join(", ") || "Katy, Sugar Land, The Woodlands";
+
   const intel = await callClaude(
-    `You are Wanda, Competitor Assassin for Rayburn Roofing in Houston Texas. Every competitor failure is a Rayburn Roofing opportunity. Move fast. Be specific. Results may vary.`,
-    `Generate today's COMPETITOR DOMINATION BRIEF:
+    `You are Wanda, Competitor Intelligence for Rayburn Roofing in Houston Texas. Every competitor failure is a Rayburn Roofing opportunity. Focus today on: ${topZones}. Results may vary.`,
+    `Top opportunity zones today: ${topZones}
 
-COMPETITOR VULNERABILITY TODAY (label it): The most exploitable weakness in Houston roofing competitors right now. Exact message Kyle sends to capture their dissatisfied customers.
+Generate COMPETITOR DOMINATION BRIEF:
 
-FACEBOOK GROUP MONITORING (label it): Exact keywords Kyle searches in Houston Facebook groups TODAY to find complaints about roofers. What to search. Exact response when found.
+TOP COMPETITOR WEAKNESS TODAY (label it): Most exploitable weakness in Houston roofing competitors right now. Exact message Kyle sends to capture their customers in ${topZones}.
 
-NEGATIVE REVIEW INTERCEPT (label it): When a Houston competitor gets a 1-3 star Google review — exactly what Kyle does in 24 hours. Full response script.
+FACEBOOK GROUP MONITORING (label it): Keywords Kyle searches in ${topZones} Facebook groups today. What to look for. Exact response when found.
 
-ANTI-COMPETITOR POSITIONING (label it): When a prospect mentions a competitor — exactly what Kyle says. Under 75 words. Strategic. Not attacking.
+NEGATIVE REVIEW INTERCEPT (label it): Houston competitor gets 1-3 star Google review. What Kyle does in 24 hours. Full script.
 
-FIRST MOVER PROTOCOL (label it): After any competitor failure — exact steps in first 2 hours. Maximum speed.`, 800
+ANTI-COMPETITOR SCRIPT (label it): Prospect mentions a competitor. Under 75 words. Strategic. Not attacking.
+
+FIRST MOVER PROTOCOL (label it): After any competitor failure in ${topZones} — exact steps in first 2 hours.`,
+    700
   );
 
   await saveToAirtable(TABLES.agentOutputs, {
     "Date":        today(),
     "Agent":       "Wanda",
-    "Task Title":  `Competitor Intelligence — ${today()}`,
+    "Task Title":  `Competitor Intel — ${topZones} — ${today()}`,
     "Task Output": intel,
     "Status":      "Completed",
     "Niche":       "Roofing",
@@ -632,29 +796,30 @@ FIRST MOVER PROTOCOL (label it): After any competitor failure — exact steps in
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  TONY — WEALTH TRACKING
+//  TONY — WEALTH BUILDING
 // ═══════════════════════════════════════════════════════════════
 
 async function runTony() {
-  log("Tony: Generating wealth building brief...");
+  log("Tony: Generating wealth brief...");
 
   const wealth = await callClaude(
-    `You are Tony, Wealth Architect for Rayburn Roofing referral operation. Kyle Duncan earns 30% commission on every job. You turn commission into lasting wealth. Consult a tax professional and financial advisor for specific advice. Results may vary.`,
-    `Generate today's WEALTH BUILDING BRIEF:
+    `You are Tony, Wealth Architect for Rayburn Roofing referral operation. Kyle Duncan earns 30% commission on every job. Consult a tax professional and financial advisor for specific advice. Results may vary.`,
+    `Generate WEALTH BUILDING BRIEF:
 
-COMMISSION ALLOCATION FORMULA (label it): How Kyle splits every check — operating costs, reinvestment, tax reserve, emergency fund, wealth building, personal. Show dollar amounts for $2,400 residential and $22,500 commercial commissions.
+COMMISSION ALLOCATION (label it): How Kyle splits every check. Show amounts for $2,400 residential and $22,500 commercial.
 
-MILESTONE TRACKER (label it): Where Kyle likely is in his business journey today and exactly what he does with money at this stage. What the next milestone looks like.
+MILESTONE THIS WEEK (label it): Where Kyle likely is right now and exactly what he does with money at this stage.
 
-TAX REMINDER (label it): Most important tax action Kyle takes this week as a self-employed commission earner. Consult a tax professional for specific advice.
+TAX REMINDER (label it): Most important tax action for a self-employed commission earner in Texas this week. Consult a tax professional.
 
-WEALTH ACTION THIS WEEK (label it): One specific wealth-building action Kyle takes this week based on where he is in his business. Specific. Actionable.`, 700
+WEALTH ACTION (label it): One specific free or low-cost wealth-building step Kyle takes this week.`,
+    500
   );
 
   await saveToAirtable(TABLES.agentOutputs, {
     "Date":        today(),
     "Agent":       "Tony",
-    "Task Title":  `Wealth Building Brief — ${today()}`,
+    "Task Title":  `Wealth Brief — ${today()}`,
     "Task Output": wealth,
     "Status":      "Completed",
     "Niche":       "Roofing",
@@ -665,11 +830,48 @@ WEALTH ACTION THIS WEEK (label it): One specific wealth-building action Kyle tak
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  MAIN DAILY CYCLE
+//  UPGRADE 6 — DAILY SUCCESS REPORT
+//  One clean Airtable record per cycle.
+//  Makes troubleshooting a 30-second job.
+// ═══════════════════════════════════════════════════════════════
+
+async function saveDailyReport(results, startTime) {
+  const mins     = ((Date.now() - startTime) / 60000).toFixed(1);
+  const successes = Object.entries(results).filter(([,v]) => v === "ok").map(([k]) => k);
+  const failures  = Object.entries(results).filter(([,v]) => v !== "ok").map(([k,v]) => `${k}: ${v}`);
+
+  const report = `TAMMM DAILY REPORT — ${today()} — ${clock()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RUNTIME: ${mins} minutes
+AGENTS COMPLETED: ${successes.join(", ")}
+FAILURES: ${failures.length > 0 ? failures.join(", ") : "None"}
+STORM ACTIVE: ${results.storm === "active" ? "🚨 YES" : "✅ No"}
+DUPLICATE ALERTS SKIPPED: ${results.dupesSkipped || 0}
+PROSPECTS SAVED: ${results.prospectsFound || 0}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STATUS: ${failures.length === 0 ? "✅ ALL SYSTEMS GREEN" : `⚠ ${failures.length} issue(s) — check logs`}`;
+
+  await saveToAirtable(TABLES.metrics, {
+    "Date":  today(),
+    "Notes": report,
+  });
+
+  log(report);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN DAILY CYCLE — WITH ALL UPGRADES
 // ═══════════════════════════════════════════════════════════════
 
 async function runDailyCycle() {
-  const start = Date.now();
+  // UPGRADE 1: Run Lock — refuse if already running
+  if (!acquireLock("Daily Cycle")) {
+    log("Daily cycle skipped — already running. Try again after current cycle completes.", "WARN");
+    return;
+  }
+
+  const startTime = Date.now();
+  const results   = {};
 
   log("═══════════════════════════════════════════");
   log("TAMMM — RAYBURN ROOFING DAILY CYCLE");
@@ -677,74 +879,120 @@ async function runDailyCycle() {
   log("═══════════════════════════════════════════");
 
   try {
-    // Step 1: Bruce checks live storm data first — everything else adapts
-    const stormData = await runBruceStormCheck();
-    await sleep(1000);
+    // UPGRADE 7 (IDEA 2): Fetch Houston Market Pulse on Mondays
+    let marketPulse = null;
+    if (new Date().getDay() === 1) {
+      try {
+        marketPulse = await fetchHoustonMarketPulse();
+        results.marketPulse = "ok";
+      } catch(e) { results.marketPulse = e.message; }
+    }
 
-    // Step 2: Tommy intelligence (weather-aware)
-    const intel = await runTommy(stormData);
+    // Step 1: Bruce — storm detection + ZIP ranking (shared context builder)
+    let sharedContext = { isStormActive:false, stormReport:"", rankedZIPs:[], forecastData:null, marketPulse };
+    try {
+      const bruceData = await runBruceStormCheck();
+      sharedContext = { ...bruceData, marketPulse };
+      results.bruce  = "ok";
+      results.storm  = bruceData?.isStormActive ? "active" : "clear";
+      results.dupesSkipped = (bruceData?.alertData?.count || 0) - (bruceData?.alertData?.newCount || 0);
+    } catch(e) { results.bruce = e.message; }
     await sleep(800);
 
-    // Step 3: Arthur content (storm-aware)
-    await runArthur(stormData, intel);
-    await sleep(800);
-
-    // Step 4: Kyle Duncan outreach (storm-aware)
-    await runKyleDuncan(stormData, intel);
-    await sleep(800);
-
-    // Step 5: Peter insurance (storm-aware — most valuable after storm)
-    await runPeter(stormData);
+    // Step 2: Tommy — intelligence using shared context
+    let intel = "";
+    try {
+      intel = await runTommy(sharedContext);
+      results.tommy = "ok";
+    } catch(e) { results.tommy = e.message; }
     await sleep(600);
 
-    // Step 6: Wanda competitor monitoring
-    await runWanda();
+    // Step 3: Hunter — prospect lists for top ZIP codes
+    try {
+      await runHunter(sharedContext.rankedZIPs || [], sharedContext);
+      results.hunter = "ok";
+    } catch(e) { results.hunter = e.message; }
     await sleep(600);
 
-    // Step 7: Tony wealth building
-    await runTony();
-    await sleep(400);
+    // Step 4: Arthur — content (ZIP-aware)
+    try {
+      await runArthur(sharedContext, intel);
+      results.arthur = "ok";
+    } catch(e) { results.arthur = e.message; }
+    await sleep(600);
 
-    // Save daily metrics
-    const mins = ((Date.now() - start) / 60000).toFixed(1);
-    await saveToAirtable(TABLES.metrics, {
-      "Date":  today(),
-      "Notes": `TAMMM cycle complete in ${mins} min. Storm active: ${stormData?.isStormActive}. ${stormData?.isStormActive ? "⚠ STORM PROTOCOL — check Agent Outputs for Bruce emergency brief." : "All clear."} Agents run: Tommy, Arthur, Kyle Duncan, Bruce, Peter, Wanda, Tony.`,
-    });
+    // Step 5: Kyle Duncan — outreach (ZIP-aware)
+    try {
+      await runKyleDuncan(sharedContext, intel);
+      results.kyleDuncan = "ok";
+    } catch(e) { results.kyleDuncan = e.message; }
+    await sleep(600);
 
-    log("═══════════════════════════════════════════");
-    log(`TAMMM CYCLE COMPLETE in ${mins} minutes`);
-    log(`Storm Active: ${stormData?.isStormActive ? "🚨 YES — CHECK AIRTABLE NOW" : "✅ No"}`);
-    log("═══════════════════════════════════════════");
+    // Step 6: Peter — insurance (carrier-aware)
+    try {
+      await runPeter(sharedContext);
+      results.peter = "ok";
+    } catch(e) { results.peter = e.message; }
+    await sleep(500);
+
+    // Step 7: Wanda — competitor monitoring
+    try {
+      await runWanda(sharedContext);
+      results.wanda = "ok";
+    } catch(e) { results.wanda = e.message; }
+    await sleep(500);
+
+    // Step 8: Tony — wealth building
+    try {
+      await runTony();
+      results.tony = "ok";
+    } catch(e) { results.tony = e.message; }
+
+    // UPGRADE 6: Daily Success Report
+    await saveDailyReport(results, startTime);
 
   } catch(e) {
     log(`CYCLE FAILED: ${e.message}`, "ERROR");
-    await saveToAirtable(TABLES.metrics, {
-      "Date":  today(),
-      "Notes": `CYCLE FAILED: ${e.message}`,
-    });
+    results.cycleFailed = e.message;
+    await saveDailyReport(results, startTime);
+  } finally {
+    releaseLock();
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  BRUCE STORM CHECK — Every 6 Hours
-//  Separate from daily cycle — runs around the clock
+//  STORM ONLY CHECK — Every 6 Hours
 // ═══════════════════════════════════════════════════════════════
 
 async function runStormOnlyCheck() {
+  // UPGRADE 1: Lock prevents storm check overlapping with daily cycle
+  if (cycleRunning) {
+    log(`Storm check skipped — ${cycleType} already running`, "WARN");
+    return;
+  }
+  if (!acquireLock("Storm Check")) return;
+
   log("Bruce: 6-hour storm check triggered...");
   try {
-    const stormData = await runBruceStormCheck();
-    if (stormData?.isStormActive) {
-      log("🚨 STORM DETECTED — Running emergency content cycle...");
-      const intel = await runTommy(stormData);
-      await runArthur(stormData, intel);
-      await runKyleDuncan(stormData, intel);
-      await runPeter(stormData);
+    const bruceData = await runBruceStormCheck();
+
+    // Only fire emergency cycle if there are NEW alerts (not duplicates)
+    if (bruceData?.isStormActive && bruceData?.hasNewAlerts) {
+      log("🚨 NEW STORM DETECTED — Running emergency content cycle...");
+      const sharedContext = { ...bruceData, marketPulse:null };
+      const intel = await runTommy(sharedContext);
+      await runArthur(sharedContext, intel);
+      await runKyleDuncan(sharedContext, intel);
+      await runPeter(sharedContext);
+      await runHunter(bruceData.rankedZIPs || [], bruceData);
       log("Storm emergency cycle complete. Check Airtable NOW.");
+    } else if (bruceData?.isStormActive && !bruceData?.hasNewAlerts) {
+      log("Storm still active but all alerts already processed — skipping duplicate content generation.");
     }
   } catch(e) {
     log(`Storm check failed: ${e.message}`, "ERROR");
+  } finally {
+    releaseLock();
   }
 }
 
@@ -758,16 +1006,15 @@ cron.schedule("0 7 * * *", () => {
   runDailyCycle();
 }, { timezone: "America/Chicago" });
 
-// Storm check only — every 6 hours
+// Storm check — every 6 hours
 cron.schedule("0 */6 * * *", () => {
   log("CRON: 6-hour storm check");
   runStormOnlyCheck();
 }, { timezone: "America/Chicago" });
 
-// Start
 log("TAMMM Railway Agent starting...");
+log("Upgrades: Run Lock · Dupe Prevention · Hunter · ZIP Ranking · Storm History · Market Pulse · Daily Report");
 log("Full cycle: 7am daily · Storm check: every 6 hours");
-log("Connecting to NOAA Weather API — no key required");
 setTimeout(runDailyCycle, 5000);
 
 // ═══════════════════════════════════════════════════════════════
@@ -780,6 +1027,10 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(200, { "Content-Type": "application/json" });
 
   if (req.url === "/run") {
+    if (cycleRunning) {
+      res.end(JSON.stringify({ status:"BLOCKED", reason:`${cycleType} already running since ${cycleStart}`, time:new Date().toISOString() }));
+      return;
+    }
     res.end(JSON.stringify({ status:"TAMMM cycle started", time:new Date().toISOString() }));
     runDailyCycle();
 
@@ -788,23 +1039,38 @@ const server = http.createServer(async (req, res) => {
     runStormOnlyCheck();
 
   } else if (req.url === "/check-storm") {
-    // Instant storm status check — no AI generation
     const stormData = await runBruceStormCheck();
     res.end(JSON.stringify({
-      stormActive: stormData?.isStormActive,
-      alertCount:  stormData?.alerts?.length || 0,
-      summary:     stormData?.summary,
-      forecast:    stormData?.forecastData?.raw,
-      time:        new Date().toISOString(),
+      stormActive:   stormData?.isStormActive,
+      hasNewAlerts:  stormData?.hasNewAlerts,
+      alertCount:    stormData?.alertData?.count || 0,
+      newAlertCount: stormData?.alertData?.newCount || 0,
+      summary:       stormData?.summary,
+      rankedZIPs:    stormData?.rankedZIPs?.slice(0,5),
+      forecast:      stormData?.forecastData?.raw,
+      cycleRunning,
+      time:          new Date().toISOString(),
+    }));
+
+  } else if (req.url === "/status") {
+    res.end(JSON.stringify({
+      status:         "TAMMM Online — Rayburn Roofing Houston",
+      cycleRunning,
+      cycleType,
+      cycleStart,
+      processedAlerts: processedAlerts.size,
+      alertHistory:   alertHistory.slice(-5),
+      time:           new Date().toISOString(),
     }));
 
   } else {
     res.end(JSON.stringify({
-      status:      "TAMMM Online — Rayburn Roofing Houston",
-      stormCheck:  "Every 6 hours via NOAA API",
-      dailyCycle:  "7am Central daily",
-      endpoints:   ["/run", "/storm", "/check-storm"],
-      time:        new Date().toISOString(),
+      status:     "TAMMM Online — Rayburn Roofing Houston",
+      stormCheck: "Every 6 hours via NOAA API",
+      dailyCycle: "7am Central daily",
+      endpoints:  ["/", "/run", "/storm", "/check-storm", "/status"],
+      upgrades:   ["Run Lock","Dupe Prevention","Hunter Agent","ZIP Ranking","Storm History","Market Pulse","Daily Report","Carrier Intelligence"],
+      time:       new Date().toISOString(),
     }));
   }
 });
@@ -814,6 +1080,6 @@ server.headersTimeout   = 120000;
 
 server.listen(PORT, "0.0.0.0", () => {
   log(`Health check server on port ${PORT}`);
-  log("Endpoints: / · /run · /storm · /check-storm");
+  log("Endpoints: / · /run · /storm · /check-storm · /status");
 });
-
+  
